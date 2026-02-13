@@ -155,10 +155,15 @@ class ClinicalCoPilotTester:
             "image_url": None
         }
         
-        success, result = self.make_request('POST', 'cases/create', case_data, expected_status=201)
+        success, result = self.make_request('POST', 'cases/create', case_data, expected_status=200)
         
         if success:
             self.case_id = result.get('id')
+            if self.case_id:
+                print(f"   Created case ID: {self.case_id[:8]}...")
+            else:
+                success = False
+                result = "No case ID returned"
             
         self.log_test("Create Case", success, result if not success else "")
         return success
