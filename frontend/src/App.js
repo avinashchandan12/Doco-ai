@@ -1,53 +1,121 @@
-import { useEffect } from "react";
 import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import axios from "axios";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { Toaster } from "@/components/ui/sonner";
+import { useState, useEffect, createContext, useContext } from "react";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+// Pages
+import LoginPage from "@/pages/LoginPage";
+import SignupPage from "@/pages/SignupPage";
+import DashboardPage from "@/pages/DashboardPage";
+import NewCasePage from "@/pages/NewCasePage";
+import AIOutputPage from "@/pages/AIOutputPage";
+import ReportViewPage from "@/pages/ReportViewPage";
+import CaseHistoryPage from "@/pages/CaseHistoryPage";
 
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
+// Auth Context
+const AuthContext = createContext(null);
+
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error("useAuth must be used within AuthProvider");
+  }
+  return context;
+};
+
+const AuthProvider = ({ children }) => {
+  const [doctor, setDoctor] = useState(null);
+  const [token, setToken] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    helloWorldApi();
+    const storedToken = localStorage.getItem("token");
+    const storedDoctor = localStorage.getItem("doctor");
+    if (storedToken && storedDoctor) {
+      setToken(storedToken);
+      setDoctor(JSON.parse(storedDoctor));
+    }
+    setLoading(false);
   }, []);
 
+  const login = (tokenData, doctorData) => {
+    localStorage.setItem("token", tokenData);
+    localStorage.setItem("doctor", JSON.stringify(doctorData));
+    setToken(tokenData);
+    setDoctor(doctorData);
+  };
+
+  const logout = () => {
+    localStorage.removeItem("token");
+    localStorage.removeItem("doctor");
+    setToken(null);
+    setDoctor(null);
+  };
+
+  const isAuthenticated = !!token;
+
   return (
-    <div>
-      <header className="App-header">
-        <a
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
+    <AuthContext.Provider value={{ doctor, token, login, logout, isAuthenticated, loading }}>
+      {children}
+    </AuthContext.Provider>
   );
+};
+
+// Protected Route
+const ProtectedRoute = ({ children }) => {
+  const { isAuthenticated, loading } = useAuth();
+  
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+      </div>
+    );
+  }
+  
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />;
+  }
+  
+  return children;
+};
+
+// Public Route (redirect if authenticated)
+const PublicRoute = ({ children }) => {
+  const { isAuthenticated, loading } = useAuth();
+  
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+      </div>
+    );
+  }
+  
+  if (isAuthenticated) {
+    return <Navigate to="/dashboard" replace />;
+  }
+  
+  return children;
 };
 
 function App() {
   return (
-    <div className="App">
+    <AuthProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
+          <Route path="/" element={<Navigate to="/login" replace />} />
+          <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
+          <Route path="/signup" element={<PublicRoute><SignupPage /></PublicRoute>} />
+          <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
+          <Route path="/new-case" element={<ProtectedRoute><NewCasePage /></ProtectedRoute>} />
+          <Route path="/case/:caseId/analysis" element={<ProtectedRoute><AIOutputPage /></ProtectedRoute>} />
+          <Route path="/case/:caseId/report" element={<ProtectedRoute><ReportViewPage /></ProtectedRoute>} />
+          <Route path="/history" element={<ProtectedRoute><CaseHistoryPage /></ProtectedRoute>} />
         </Routes>
+        <Toaster position="top-right" richColors />
       </BrowserRouter>
-    </div>
+    </AuthProvider>
   );
 }
 
