@@ -1,0 +1,177 @@
+{
+  "identity": {
+    "name": "E1",
+    "role": "Creative Designer",
+    "principles": [
+      "Fusion over Imitation",
+      "Emotion First",
+      "Content is King",
+      "Zoom In",
+      "Negative Space",
+      "Contrast"
+    ]
+  },
+  "project": {
+    "name": "AI Clinical Co-Pilot",
+    "type": "Healthcare SaaS / Dashboard",
+    "theme": "Light Mode (Medical/Clinical)",
+    "vibe": "Swiss Medical - Precision, Cleanliness, Trust",
+    "audience": "Rural Doctors & Medical Professionals"
+  },
+  "typography": {
+    "font_family": {
+      "headings": "Manrope, sans-serif",
+      "body": "Inter, sans-serif",
+      "mono": "JetBrains Mono, monospace"
+    },
+    "scale": {
+      "h1": "text-4xl md:text-5xl font-bold tracking-tight",
+      "h2": "text-3xl md:text-4xl font-semibold tracking-tight",
+      "h3": "text-2xl font-semibold",
+      "body": "text-base leading-relaxed",
+      "small": "text-sm text-muted-foreground",
+      "tiny": "text-xs font-medium uppercase tracking-wider"
+    },
+    "imports": [
+      "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');"
+    ]
+  },
+  "colors": {
+    "palette": {
+      "primary": {
+        "DEFAULT": "#0F766E",
+        "foreground": "#FFFFFF",
+        "hover": "#115E59",
+        "description": "Deep Teal - Trust, Professionalism, Calm"
+      },
+      "secondary": {
+        "DEFAULT": "#F0FDFA",
+        "foreground": "#0F766E",
+        "description": "Teal 50 - Clinical Backgrounds, Soft Highlights"
+      },
+      "accent": {
+        "DEFAULT": "#BE123C",
+        "foreground": "#FFFFFF",
+        "description": "Rose 700 - Alerts, Red Flags, Critical Actions"
+      },
+      "background": "#FFFFFF",
+      "foreground": "#0F172A",
+      "muted": "#F1F5F9",
+      "muted_foreground": "#64748B",
+      "border": "#E2E8F0",
+      "input": "#E2E8F0",
+      "ring": "#0F766E"
+    },
+    "usage_rules": [
+      "Use Primary (Deep Teal) for main actions and active states.",
+      "Use Accent (Rose) ONLY for critical alerts, 'Red Flags', or destructive actions.",
+      "Use Secondary (Pale Teal) for active card backgrounds or selected states.",
+      "Backgrounds must be pure white (#FFFFFF) or very light gray (#F8FAFC) for maximum contrast.",
+      "Text must never be pure black. Use Slate 900 (#0F172A) for headings and Slate 600 (#475569) for body."
+    ]
+  },
+  "layout": {
+    "grid_system": {
+      "dashboard": "grid grid-cols-1 md:grid-cols-12 gap-6",
+      "form": "grid grid-cols-1 md:grid-cols-2 gap-8",
+      "card_grid": "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6"
+    },
+    "spacing": {
+      "container_padding": "p-4 md:p-8 lg:p-12",
+      "section_gap": "gap-8 md:gap-12",
+      "internal_card_padding": "p-6"
+    },
+    "container": "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8",
+    "border_radius": "rounded-lg"
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 py-2 rounded-md font-medium transition-colors",
+      "secondary": "bg-secondary text-secondary-foreground hover:bg-secondary/80 h-10 px-4 py-2 rounded-md font-medium transition-colors",
+      "outline": "border border-input bg-background hover:bg-accent hover:text-accent-foreground h-10 px-4 py-2 rounded-md font-medium transition-colors",
+      "ghost": "hover:bg-accent hover:text-accent-foreground h-10 px-4 py-2 rounded-md font-medium transition-colors",
+      "destructive": "bg-destructive text-destructive-foreground hover:bg-destructive/90 h-10 px-4 py-2 rounded-md font-medium transition-colors"
+    },
+    "cards": {
+      "base": "rounded-lg border bg-card text-card-foreground shadow-sm",
+      "hover": "hover:shadow-md transition-shadow duration-200",
+      "interactive": "cursor-pointer hover:border-primary/50 transition-colors"
+    },
+    "inputs": {
+      "base": "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+    },
+    "badges": {
+      "default": "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-primary text-primary-foreground hover:bg-primary/80",
+      "secondary": "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80",
+      "destructive": "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-destructive text-destructive-foreground hover:bg-destructive/80",
+      "outline": "text-foreground"
+    }
+  },
+  "visual_enhancers": {
+    "shadows": {
+      "soft": "shadow-[0_2px_8px_rgba(0,0,0,0.04)]",
+      "medium": "shadow-[0_4px_16px_rgba(0,0,0,0.08)]",
+      "float": "shadow-[0_8px_30px_rgba(0,0,0,0.12)]"
+    },
+    "glassmorphism": {
+      "header": "bg-white/80 backdrop-blur-md border-b border-slate-200/50",
+      "overlay": "bg-black/20 backdrop-blur-sm"
+    },
+    "gradients": {
+      "subtle_bg": "bg-gradient-to-b from-slate-50 to-white",
+      "active_card": "bg-gradient-to-br from-white to-teal-50/50"
+    }
+  },
+  "assets": {
+    "images": [
+      {
+        "category": "Doctor Profile",
+        "url": "https://images.unsplash.com/photo-1758691461513-88a0aef72160?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzZ8MHwxfHNlYXJjaHwyfHxkb2N0b3IlMjBwb3J0cmFpdCUyMHByb2Zlc3Npb25hbCUyMHdoaXRlJTIwY29hdHxlbnwwfHx8fDE3NzEwMjIzMDJ8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Professional doctor portrait for dashboard profile"
+      },
+      {
+        "category": "Login Background",
+        "url": "https://images.pexels.com/photos/7722864/pexels-photo-7722864.jpeg",
+        "description": "Abstract scientific/medical background for login page"
+      },
+      {
+        "category": "Empty State",
+        "url": "https://images.unsplash.com/photo-1762625570087-6d98fca29531?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMjh8MHwxfHNlYXJjaHwxfHxtZWRpY2FsJTIwY2xpbmljJTIwaW50ZXJpb3IlMjBjbGVhbiUyMG1pbmltYWxpc3R8ZW58MHx8fHwxNzcxMDIyMzA3fDA&ixlib=rb-4.1.0&q=85",
+        "description": "Clean clinic interior for empty states or generic placeholders"
+      }
+    ],
+    "icons": {
+      "library": "lucide-react",
+      "style": "Stroke width 1.5px or 2px, consistent size (w-4 h-4 for small, w-5 h-5 for default)"
+    }
+  },
+  "motion": {
+    "transitions": "transition-all duration-200 ease-in-out",
+    "hover_lift": "hover:-translate-y-1 hover:shadow-md",
+    "page_enter": "animate-in fade-in slide-in-from-bottom-4 duration-500",
+    "accordion": "data-[state=open]:animate-accordion-down data-[state=closed]:animate-accordion-up"
+  },
+  "accessibility": {
+    "contrast": "Ensure 4.5:1 contrast ratio for normal text. Use Slate-600 or darker on white.",
+    "focus_states": "focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2",
+    "aria": "Use aria-labels for icon-only buttons. Ensure form inputs have associated labels."
+  },
+  "universal_guidelines": [
+    "Do not use generic centered layouts. Use grids and asymmetry.",
+    "Use 2-3x more spacing than typical designs.",
+    "Every interaction needs micro-animations.",
+    "Use 'sonner' for toasts.",
+    "All interactive elements MUST include data-testid.",
+    "Mobile-first responsive design is critical.",
+    "Do not use 'Inter' for headings; use 'Manrope'.",
+    "Avoid full-screen gradients; use subtle textures or solid colors."
+  ],
+  "instructions_to_main_agent": [
+    "1. Install 'lucide-react' and 'sonner' if not present.",
+    "2. Update 'tailwind.config.js' with the custom colors and font families.",
+    "3. Create a 'Layout' component that wraps pages with the standard header/sidebar.",
+    "4. Build the 'New Patient Case' form using Shadcn Form components, but styled with the 'Manrope' font and generous spacing.",
+    "5. Ensure the 'AI Clinical Output' section uses distinct visual hierarchy (e.g., Red border for Red Flags, Green/Teal for Next Steps).",
+    "6. Use the provided image URLs for the doctor profile and login background."
+  ]
+}
