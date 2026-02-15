@@ -1,4 +1,4 @@
-# 🏥 DocCopilot
+# 🏥 Doco Assist AI
 
 **AI Clinical Co-Pilot for Rural Healthcare**
 
@@ -29,9 +29,9 @@ but a shortage of intelligent assistance at the point of care.
 
 ------------------------------------------------------------------------
 
-# 🤖 The Solution --- DocCopilot
+# 🤖 The Solution --- Doco Assist AI
 
-DocCopilot is a **doctor-specialised Clinical Decision Support System
+Doco Assist AI is a **doctor-specialised Clinical Decision Support System
 (CDSS)**.
 
 ✔ AI Clinical Assistant\
@@ -91,7 +91,7 @@ Structured Clinical Data
 
 # ⚠ Safety & Ethics
 
-DocCopilot is:
+Doco Assist AI is:
 
 ✔ Doctor-centric\
 ✔ Human-in-the-loop\
@@ -133,8 +133,11 @@ Future modules:
 
 # 📞 Contact
 
-DocCopilot Team\
-📧 team@doccopilot.in
+Doco Assist AI Team\
+📧 avinashchandan12@gmail.com
+
+📧 tanvidudam2003@gmail.com
+
 
 ------------------------------------------------------------------------
 
