@@ -3,7 +3,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 import os
 import logging
 from pathlib import Path
@@ -15,6 +15,9 @@ import jwt
 import bcrypt
 import json
 import re
+import boto3
+from botocore.exceptions import ClientError
+import tempfile
 
 # Load environment
 ROOT_DIR = Path(__file__).parent
@@ -29,6 +32,44 @@ db = client[os.environ['DB_NAME']]
 JWT_SECRET = os.environ.get('JWT_SECRET', 'clinical-copilot-secret')
 JWT_ALGORITHM = os.environ.get('JWT_ALGORITHM', 'HS256')
 JWT_EXPIRATION_HOURS = int(os.environ.get('JWT_EXPIRATION_HOURS', 24))
+
+# AWS S3 Config
+AWS_S3_BUCKET = os.environ.get('AWS_S3_BUCKET')  # None → fallback to local disk
+AWS_REGION = os.environ.get('AWS_REGION', 'ap-south-1')
+
+def get_s3_client():
+    """Return a boto3 S3 client. Uses IAM role on EB, or env keys locally."""
+    return boto3.client(
+        's3',
+        region_name=AWS_REGION,
+        aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
+        aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
+    )
+
+def upload_to_s3(file_bytes: bytes, s3_key: str, content_type: str = 'application/octet-stream') -> str:
+    """Upload bytes to S3 and return the public S3 URL."""
+    s3 = get_s3_client()
+    s3.put_object(
+        Bucket=AWS_S3_BUCKET,
+        Key=s3_key,
+        Body=file_bytes,
+        ContentType=content_type,
+    )
+    return f"https://{AWS_S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{s3_key}"
+
+def get_presigned_url(s3_key: str, expiry: int = 3600) -> str:
+    """Generate a pre-signed download URL for an S3 object."""
+    s3 = get_s3_client()
+    try:
+        url = s3.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': AWS_S3_BUCKET, 'Key': s3_key},
+            ExpiresIn=expiry,
+        )
+        return url
+    except ClientError as e:
+        logger.error(f"S3 presigned URL error: {e}")
+        raise HTTPException(status_code=500, detail="Could not generate download URL")
 
 # Create the main app
 app = FastAPI(title="AI Clinical Co-Pilot API")
@@ -239,21 +280,25 @@ def mock_ocr_extract(filename: str) -> dict:
 
 # ============== PDF SERVICE ==============
 
-def generate_case_pdf(case_data: dict, doctor_name: str) -> str:
-    """Generate PDF report for a case"""
+def generate_case_pdf(case_data: dict, doctor_name: str, output_dir: str = None) -> str:
+    """Generate PDF report for a case. Returns the filepath of the generated PDF."""
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import inch
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-    
-    # Create reports directory
-    reports_dir = ROOT_DIR / "reports"
-    reports_dir.mkdir(exist_ok=True)
-    
+
     filename = f"case_report_{case_data['id']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-    filepath = reports_dir / filename
-    
+
+    if output_dir:
+        # Use provided temp directory (e.g., for S3 upload)
+        filepath = Path(output_dir) / filename
+    else:
+        # Default: local reports directory
+        reports_dir = ROOT_DIR / "reports"
+        reports_dir.mkdir(exist_ok=True)
+        filepath = reports_dir / filename
+
     doc = SimpleDocTemplate(str(filepath), pagesize=A4, topMargin=0.75*inch, bottomMargin=0.75*inch)
     styles = getSampleStyleSheet()
     
@@ -466,38 +511,40 @@ async def update_case(case_id: str, data: CaseCreate, doctor: dict = Depends(get
 
 @api_router.post("/cases/upload-prescription", response_model=PrescriptionExtractResponse)
 async def upload_prescription(file: UploadFile = File(...), doctor: dict = Depends(get_current_doctor)):
-    # Save file temporarily
-    uploads_dir = ROOT_DIR / "uploads"
-    uploads_dir.mkdir(exist_ok=True)
-    
-    file_path = uploads_dir / f"{uuid.uuid4()}_{file.filename}"
-    
+    # Read file content into memory — no need to persist prescription uploads
     content = await file.read()
-    with open(file_path, "wb") as f:
-        f.write(content)
-    
-    # Mock OCR extraction
+
+    if AWS_S3_BUCKET:
+        # Optionally save to S3 for audit trail
+        s3_key = f"prescriptions/{uuid.uuid4()}_{file.filename}"
+        upload_to_s3(content, s3_key, file.content_type or 'application/octet-stream')
+
+    # Mock OCR extraction (operates on filename metadata)
     result = mock_ocr_extract(file.filename)
-    
     return PrescriptionExtractResponse(**result)
 
 @api_router.post("/cases/upload-image")
 async def upload_image(file: UploadFile = File(...), doctor: dict = Depends(get_current_doctor)):
-    uploads_dir = ROOT_DIR / "uploads"
-    uploads_dir.mkdir(exist_ok=True)
-    
     file_id = str(uuid.uuid4())
     file_ext = Path(file.filename).suffix
-    file_path = uploads_dir / f"{file_id}{file_ext}"
-    
     content = await file.read()
-    with open(file_path, "wb") as f:
-        f.write(content)
-    
-    # Return relative URL
-    return {"image_url": f"/api/uploads/{file_id}{file_ext}", "filename": file.filename}
+    content_type = file.content_type or 'image/jpeg'
 
-# Serve uploaded files
+    if AWS_S3_BUCKET:
+        s3_key = f"uploads/{file_id}{file_ext}"
+        image_url = upload_to_s3(content, s3_key, content_type)
+    else:
+        # Local fallback (for development)
+        uploads_dir = ROOT_DIR / "uploads"
+        uploads_dir.mkdir(exist_ok=True)
+        file_path = uploads_dir / f"{file_id}{file_ext}"
+        with open(file_path, "wb") as f:
+            f.write(content)
+        image_url = f"/api/uploads/{file_id}{file_ext}"
+
+    return {"image_url": image_url, "filename": file.filename}
+
+# Serve uploaded files (only used in local dev without S3)
 @api_router.get("/uploads/{filename}")
 async def get_upload(filename: str):
     file_path = ROOT_DIR / "uploads" / filename
@@ -544,18 +591,34 @@ async def generate_report(case_id: str, doctor: dict = Depends(get_current_docto
     case = await db.cases.find_one({"id": case_id, "doctor_id": doctor['id']}, {"_id": 0})
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
-    
-    # Generate PDF
-    pdf_path = generate_case_pdf(case, doctor['name'])
-    
-    return {"pdf_url": f"/api/reports/download/{Path(pdf_path).name}"}
+
+    if AWS_S3_BUCKET:
+        # Generate PDF to a temp file, upload to S3, return presigned URL
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pdf_path = generate_case_pdf(case, doctor['name'], output_dir=tmpdir)
+            pdf_filename = Path(pdf_path).name
+            s3_key = f"reports/{pdf_filename}"
+            with open(pdf_path, 'rb') as f:
+                upload_to_s3(f.read(), s3_key, 'application/pdf')
+        presigned_url = get_presigned_url(s3_key)
+        return {"pdf_url": presigned_url, "pdf_filename": pdf_filename}
+    else:
+        # Local fallback
+        pdf_path = generate_case_pdf(case, doctor['name'])
+        return {"pdf_url": f"/api/reports/download/{Path(pdf_path).name}"}
 
 @api_router.get("/reports/download/{filename}")
 async def download_report(filename: str):
-    file_path = ROOT_DIR / "reports" / filename
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="Report not found")
-    return FileResponse(file_path, filename=filename, media_type="application/pdf")
+    if AWS_S3_BUCKET:
+        # Redirect to a fresh presigned URL
+        s3_key = f"reports/{filename}"
+        presigned_url = get_presigned_url(s3_key)
+        return RedirectResponse(url=presigned_url)
+    else:
+        file_path = ROOT_DIR / "reports" / filename
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="Report not found")
+        return FileResponse(file_path, filename=filename, media_type="application/pdf")
 
 # ============== ROOT ROUTE ==============
 
