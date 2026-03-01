@@ -3,10 +3,10 @@ frontend:
   phases:
     preBuild:
       commands:
-        - cd frontend && yarn install --frozen-lockfile
+        - cd $CODEBUILD_SRC_DIR/frontend && yarn install --frozen-lockfile
     build:
       commands:
-        - cd frontend && yarn build
+        - cd $CODEBUILD_SRC_DIR/frontend && yarn build
   artifacts:
     baseDirectory: frontend/build
     files:
