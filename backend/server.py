@@ -184,14 +184,15 @@ async def get_current_doctor(credentials: HTTPAuthorizationCredentials = Depends
 # ============== AI SERVICE ==============
 
 async def analyze_case_with_ai(case_data: dict) -> dict:
-    """Use Gemini 3 Flash to analyze clinical case"""
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
-    
-    api_key = os.environ.get('EMERGENT_LLM_KEY')
+    """Use Google Gemini to analyze clinical case"""
+    import google.generativeai as genai
+
+    # Support both GEMINI_API_KEY and legacy EMERGENT_LLM_KEY
+    api_key = os.environ.get('GEMINI_API_KEY') or os.environ.get('EMERGENT_LLM_KEY')
     if not api_key:
-        logger.error("EMERGENT_LLM_KEY not found")
+        logger.error("No AI API key found (GEMINI_API_KEY or EMERGENT_LLM_KEY)")
         raise HTTPException(status_code=500, detail="AI service not configured")
-    
+
     system_prompt = """You are a senior experienced physician assisting a rural general practitioner.
 You are NOT diagnosing patients.
 You provide clinical decision support only.
@@ -212,11 +213,11 @@ IMPORTANT: You MUST respond with ONLY valid JSON in this exact format, no additi
     symptoms_str = ", ".join(case_data.get('symptoms', []))
     vitals = case_data.get('vitals', {})
     vitals_str = f"Temperature: {vitals.get('temperature', 'N/A')}, BP: {vitals.get('bp', 'N/A')}, Pulse: {vitals.get('pulse', 'N/A')}"
-    
+
     prescription_info = ""
     if case_data.get('prescription_data'):
         prescription_info = f"\nPrescription: {json.dumps(case_data['prescription_data'])}"
-    
+
     user_prompt = f"""Please analyze this clinical case:
 
 Symptoms: {symptoms_str}
@@ -227,20 +228,18 @@ Clinical Notes: {case_data.get('clinical_notes', 'None provided')}{prescription_
 Generate a clinical decision support response in the exact JSON format specified."""
 
     try:
-        chat = LlmChat(
-            api_key=api_key,
-            session_id=f"case-{uuid.uuid4()}",
-            system_message=system_prompt
-        ).with_model("gemini", "gemini-3-flash-preview")
-        
-        user_message = UserMessage(text=user_prompt)
-        response = await chat.send_message(user_message)
-        
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash",
+            system_instruction=system_prompt
+        )
+        response = model.generate_content(user_prompt)
+        response_text = response.text
+
         # Parse JSON from response
-        json_match = re.search(r'\{[\s\S]*\}', response)
+        json_match = re.search(r'\{[\s\S]*\}', response_text)
         if json_match:
             result = json.loads(json_match.group())
-            # Validate structure
             return {
                 "clinical_summary": result.get("clinical_summary", "Analysis completed"),
                 "considerations": result.get("considerations", []),
@@ -249,7 +248,7 @@ Generate a clinical decision support response in the exact JSON format specified
                 "next_steps": result.get("next_steps", [])
             }
         else:
-            logger.error(f"Failed to parse AI response: {response}")
+            logger.error(f"Failed to parse AI response: {response_text}")
             return {
                 "clinical_summary": "AI analysis completed. Please review the case details.",
                 "considerations": ["Manual clinical review recommended"],
@@ -257,10 +256,12 @@ Generate a clinical decision support response in the exact JSON format specified
                 "prescription_review": [],
                 "next_steps": ["Continue standard clinical evaluation"]
             }
-            
+
     except Exception as e:
         logger.error(f"AI analysis error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"AI analysis failed: {str(e)}")
+
+
 
 # ============== OCR SERVICE (Mock) ==============
 
