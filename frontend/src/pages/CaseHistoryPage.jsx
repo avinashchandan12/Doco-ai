@@ -6,9 +6,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { 
-  ArrowLeft, Search, Calendar, ChevronRight, 
-  RefreshCw, Edit, Eye, Loader2, FileText, 
+import {
+  ArrowLeft, Search, Calendar, ChevronRight,
+  RefreshCw, Edit, Eye, Loader2, FileText,
   Stethoscope, Filter
 } from "lucide-react";
 
@@ -45,12 +45,13 @@ const CaseHistoryPage = () => {
       setFilteredCases(cases);
       return;
     }
-    
+
     const query = searchQuery.toLowerCase();
     const filtered = cases.filter((c) => {
       const symptoms = c.symptoms.join(" ").toLowerCase();
       const id = c.id.toLowerCase();
-      return symptoms.includes(query) || id.includes(query);
+      const pName = c.patient_name ? c.patient_name.toLowerCase() : "";
+      return symptoms.includes(query) || id.includes(query) || pName.includes(query);
     });
     setFilteredCases(filtered);
   };
@@ -108,7 +109,7 @@ const CaseHistoryPage = () => {
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <Input
-              placeholder="Search by symptoms or case ID..."
+              placeholder="Search by patient name, symptoms, or case ID..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-10 max-w-md"
@@ -193,7 +194,7 @@ const CaseHistoryPage = () => {
                       <div className="flex items-center gap-2 mb-2">
                         <Stethoscope className="w-4 h-4 text-primary" />
                         <span className="font-medium text-slate-900">
-                          Case #{caseItem.id.slice(0, 8)}
+                          {caseItem.patient_name ? `${caseItem.patient_name} (Case #${caseItem.id.slice(0, 8)})` : `Case #${caseItem.id.slice(0, 8)}`}
                         </span>
                         {caseItem.ai_analysis ? (
                           <Badge

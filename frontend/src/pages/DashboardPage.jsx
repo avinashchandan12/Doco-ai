@@ -6,9 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { 
-  Stethoscope, Plus, LogOut, User, Calendar, 
-  ChevronRight, FileText, History, Loader2, AlertCircle 
+import {
+  Stethoscope, Plus, LogOut, User, Calendar,
+  ChevronRight, FileText, History, Loader2, AlertCircle
 } from "lucide-react";
 
 const DashboardPage = () => {
@@ -61,6 +61,10 @@ const DashboardPage = () => {
               <span className="font-semibold text-lg text-slate-900">Clinical Co-Pilot</span>
             </div>
             <div className="flex items-center gap-4">
+              <Link to="/settings" className="text-slate-600 hover:text-slate-900 flex items-center gap-1.5" data-testid="settings-nav-link">
+                <User className="w-4 h-4" />
+                <span className="hidden sm:inline text-sm">Profile</span>
+              </Link>
               <Link to="/history" className="text-slate-600 hover:text-slate-900 flex items-center gap-1.5" data-testid="history-nav-link">
                 <History className="w-4 h-4" />
                 <span className="hidden sm:inline text-sm">History</span>
@@ -197,7 +201,7 @@ const DashboardPage = () => {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
                         <span className="text-sm font-medium text-slate-900 truncate">
-                          Case #{caseItem.id.slice(0, 8)}
+                          {caseItem.patient_name ? `${caseItem.patient_name} (Case #${caseItem.id.slice(0, 8)})` : `Case #${caseItem.id.slice(0, 8)}`}
                         </span>
                         {caseItem.ai_analysis ? (
                           <Badge variant="secondary" className="bg-green-100 text-green-700 border-0">
@@ -231,7 +235,7 @@ const DashboardPage = () => {
           <div className="flex gap-3">
             <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
             <p className="text-sm text-amber-800">
-              <strong>Disclaimer:</strong> This system provides clinical decision support only. 
+              <strong>Disclaimer:</strong> This system provides clinical decision support only.
               Final medical judgment rests with the physician.
             </p>
           </div>

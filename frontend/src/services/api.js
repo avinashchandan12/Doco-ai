@@ -40,6 +40,7 @@ export const authAPI = {
 // Doctor APIs
 export const doctorAPI = {
   getProfile: () => api.get("/doctor/profile"),
+  updateProfile: (data) => api.put("/doctor/profile", data),
 };
 
 // Case APIs
@@ -73,10 +74,26 @@ export const aiAPI = {
   analyseCase: (caseId) => api.post(`/ai/analyse-case?case_id=${caseId}`),
 };
 
+// ABHA APIs
+export const abhaAPI = {
+  generateOtp: (aadhaarNumber) =>
+    api.post("/v3/abha/generate-otp", { aadhaar_number: aadhaarNumber }),
+};
+
 // Report APIs
 export const reportAPI = {
   generate: (caseId) => api.post(`/reports/generate?case_id=${caseId}`),
   getDownloadUrl: (filename) => `${API_URL}/api/reports/download/${filename}`,
+};
+
+
+// Prescription AI APIs
+export const prescriptionAPI = {
+  suggest: (data) => api.post("/prescriptions/suggest", data),
+  accept: (data) => api.post("/prescriptions/accept", data),
+  getWorkspace: (patientId, sessionId) =>
+    api.get(`/prescriptions/workspace/${patientId}/${sessionId}`),
+  print: (data) => api.post("/prescriptions/print", data),
 };
 
 export default api;

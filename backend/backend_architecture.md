@@ -1,95 +1,216 @@
-# AI Clinical Co-Pilot: Backend Architecture
+# AI Clinical Co-Pilot: System Architecture
 
 ## Overview
-The backend for the **AI Clinical Co-Pilot** is built using **FastAPI**, providing a high-performance, asynchronous REST API. It is designed to act as a clinical decision support system, assisting doctors in analyzing cases, securely managing patient records, and interacting with AI models for diagnosis suggestions based on clinical inputs.
+The **AI Clinical Co-Pilot** is a cloud-native clinical decision support platform. It assists rural general practitioners in analyzing patient cases, extracting prescriptions via OCR, and generating AI-powered clinical insights using Google Gemini. The system is fully deployed on AWS with a serverless frontend and containerized backend.
+
+---
+
+## Deployed AWS Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         USER (Browser)                          │
+└────────────────────────────┬────────────────────────────────────┘
+                             │ HTTPS
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              AWS Amplify (Frontend Hosting)                      │
+│  URL: https://main.d1mrd385bumfov.amplifyapp.com                │
+│  • React SPA (static build served via CDN)                      │
+│  • CI/CD via GitHub (main branch auto-deploys)                  │
+│  • Build config: amplify.yml (appRoot: frontend)                │
+└────────────────────────────┬────────────────────────────────────┘
+                             │ HTTPS API calls
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              AWS CloudFront (HTTPS Termination)                  │
+│  URL: https://d1715vumfk0ih3.cloudfront.net                     │
+│  • Provides HTTPS to the browser (mixed-content fix)            │
+│  • Cache policy: CachingDisabled (API bypass)                   │
+│  • Origin request policy: AllViewer                             │
+│  • Origin: EB backend via HTTP on port 80                       │
+└────────────────────────────┬────────────────────────────────────┘
+                             │ HTTP (AWS internal)
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│         AWS Elastic Beanstalk (Backend — FastAPI)               │
+│  URL: http://doco-ai-be-env.eba-aavdds9g.ap-south-1.            │
+│         elasticbeanstalk.com                                     │
+│  • Python 3.14 on Amazon Linux 2023                             │
+│  • Uvicorn ASGI server on port 8000                             │
+│  • Nginx reverse proxy (EB-managed)                             │
+│  • Procfile: uvicorn server:app --host 0.0.0.0 --port 8000      │
+│  • Deployed via backend_deploy.zip                              │
+└─────────┬────────────────────────────────────┬──────────────────┘
+          │                                     │
+          ▼                                     ▼
+┌──────────────────────┐          ┌─────────────────────────────┐
+│  MongoDB Atlas       │          │  AWS S3 (File Storage)       │
+│  (Cloud Database)    │          │  • Prescription images        │
+│  • Cluster: ap-south │          │  • Clinical photos            │
+│  • Collections:      │          │  • Generated PDFs             │
+│    - doctors         │          └─────────────────────────────┘
+│    - cases           │
+│    - ai_logs         │          ┌─────────────────────────────┐
+│  • Network Access:   │          │  Google Gemini API           │
+│    0.0.0.0/0         │          │  Model: gemini-3-flash-preview│
+│    (whitelist EB IP  │          │  • Clinical case analysis     │
+│    in production)    │          │  • Structured JSON output     │
+└──────────────────────┘          └─────────────────────────────┘
+```
+
+---
 
 ## Technology Stack
-- **Framework:** FastAPI (Asynchronous, Type-safe REST API)
-- **Database:** MongoDB (using `motor` for async interactions)
-- **Authentication:** JWT (JSON Web Tokens) with `bcrypt` for password hashing
-- **AI Integration:** Google Gemini 3 Flash (via the `emergentintegrations` SDK)
-- **PDF Generation:** ReportLab
-- **Server/ASGI:** Uvicorn
-- **Environment Management:** `python-dotenv`
 
-## Directory Structure
-The core backend lies within the `backend/` directory:
-- `server.py`: The single entry point containing the full application logic, routing, schemas, and service integrations.
-- `requirements.txt`: Python package dependencies.
-- `reports/`: Directory dynamically created to store generated case report PDFs.
-- `uploads/`: Directory dynamically created to handle uploaded prescription files and clinical images.
-- `.env`: Environment variables configuration file (loaded on startup).
+### Frontend
+| Layer | Technology |
+|---|---|
+| Framework | React (CRA + CRACO) |
+| Routing | React Router v6 |
+| Styling | Tailwind CSS |
+| HTTP Client | Axios |
+| Hosting | AWS Amplify |
 
-## Core Components & Modules
+### Backend
+| Layer | Technology |
+|---|---|
+| Framework | FastAPI (async) |
+| Runtime | Python 3.14 on Amazon Linux 2023 |
+| ASGI Server | Uvicorn |
+| Reverse Proxy | Nginx (EB-managed) |
+| Database Driver | Motor (async pymongo) |
+| Authentication | JWT + bcrypt |
+| AI | Google Gemini 3 Flash Preview |
+| PDF Generation | ReportLab |
+| File Storage | AWS S3 (boto3) |
 
-### 1. Data Models (Pydantic Schemas)
-Validation and serialization are heavily enforced using Pydantic models.
-- **Authentication:** `DoctorSignup`, `DoctorLogin`, `DoctorResponse`, `TokenResponse`
-- **Clinical Cases:** `CaseCreate` (symptoms, vitals, duration), `CaseResponse`, `VitalsInput`
-- **AI Analysis:** `AIAnalysisResult` (structured response for clinical summary, red flags, considerations, next steps)
-- **Uploads:** `PrescriptionExtractResponse`
+### Infrastructure
+| Component | Service | Role |
+|---|---|---|
+| Frontend Hosting | AWS Amplify | CI/CD + CDN for React SPA |
+| Backend Hosting | AWS Elastic Beanstalk | Managed Python platform |
+| HTTPS Layer | AWS CloudFront | TLS termination for EB backend |
+| Database | MongoDB Atlas | Managed NoSQL cloud DB |
+| File Storage | AWS S3 | Blob storage for uploads & PDFs |
+| AI | Google Gemini API | Clinical LLM analysis |
 
-### 2. Authentication & Authorization
-- **Mechanism:** Bearer HTTP token.
-- **Implementation:** `get_current_doctor` dependency decoding JWT tokens and authenticating requests by verifying the doctor's record from MongoDB.
-- **Security:** Passwords are hashed/salted via bcrypt before being stored in the `doctors` collection.
+---
 
-### 3. Services
+## API Endpoints
 
-#### AI Service (`analyze_case_with_ai`)
-- Integrates with Google Gemini via `emergentintegrations.llm.chat`.
-- System prompt restricts AI to non-diagnostic, decision-support mode only, aiming for conservative, medically responsible language.
-- Enforces strict JSON responses containing `clinical_summary`, `considerations`, `red_flags`, `prescription_review`, and `next_steps`.
+| Route | Method | Auth | Description |
+|---|---|---|---|
+| `/api/auth/signup` | POST | ❌ | Register a new doctor |
+| `/api/auth/login` | POST | ❌ | Authenticate, receive JWT |
+| `/api/doctor/profile` | GET | ✅ | Fetch doctor profile |
+| `/api/cases/create` | POST | ✅ | Create new patient case |
+| `/api/cases/list` | GET | ✅ | List all doctor's cases |
+| `/api/cases/{id}` | GET/PUT | ✅ | Get or update case |
+| `/api/cases/upload-prescription` | POST | ✅ | Upload & extract Rx image |
+| `/api/cases/upload-image` | POST | ✅ | Upload clinical image to S3 |
+| `/api/ai/analyse-case` | POST | ✅ | Trigger Gemini AI analysis |
+| `/api/reports/generate` | POST | ✅ | Generate PDF case report |
+| `/api/reports/download/{id}` | GET | ✅ | Download generated PDF |
 
-#### OCR Service (Mock)
-- A placeholder mock function (`mock_ocr_extract`) simulates extracting text and medication details from uploaded prescription images.
+---
 
-#### PDF Generation Service (`generate_case_pdf`)
-- Uses `ReportLab` to programmatically build an A4 formatted case report.
-- Includes patient vitals, symptoms, doctor details, AI interpretations, and strict AI disclaimers into the final PDF.
+## Data Flow
 
-### 4. API Routing
-The application groups endpoints under the `/api` prefix.
+```
+Doctor fills case form
+        │
+        ▼
+POST /cases/create → MongoDB (cases collection)
+        │
+        ▼
+POST /cases/upload-image → S3 bucket → URL stored in case doc
+        │
+        ▼
+POST /ai/analyse-case
+        │
+        ├── Fetch case from MongoDB
+        ├── Build clinical prompt with vitals, symptoms, notes
+        ├── Call Gemini 3 Flash Preview API
+        ├── Parse structured JSON response
+        ├── Update case doc with AI analysis
+        └── Log to ai_logs collection
+        │
+        ▼
+POST /reports/generate → ReportLab PDF → S3 upload → download URL
+```
 
-| Prefix / Route | Method | Description |
-|----------------|--------|-------------|
-| **Auth Routes** | | |
-| `/auth/signup` | POST | Register a new doctor. Returns a JWT token. |
-| `/auth/login` | POST | Authenticate existing doctor. |
-| **Doctor Routes** | | |
-| `/doctor/profile`| GET | Fetch profile details of the authenticated doctor. |
-| **Case Routes** | | |
-| `/cases/create` | POST | Register a new case against the doctor. |
-| `/cases/list` | GET | List all cases belonging to the doctor (latest first). |
-| `/cases/{id}` | GET/PUT| Retrieve or update a specific case. |
-| **Upload Routes** | | |
-| `/cases/upload-prescription` | POST | Upload an Rx image and extract text (mock OCR). |
-| `/cases/upload-image` | POST | Upload generic clinical imagery; returns relative URL. |
-| `/uploads/{name}` | GET | Serve the uploaded file locally. |
-| **AI Routes** | | |
-| `/ai/analyse-case`| POST | Triggers AI case analysis and updates the specific case document. Logs interaction to `ai_logs`. |
-| **Report Routes** | | |
-| `/reports/generate`| POST | Generates the PDF case summary locally. |
-| `/reports/download/{id}` | GET | Serves the generated PDF file from the `reports/` directory. |
+---
 
-## Data Persistence (MongoDB)
-The database structure is primarily composed of three collections:
-1. **`doctors`**: Stores physician accounts, credentials, and profile information.
-2. **`cases`**: The central collection storing patient data, clinical notes, attached symptoms, vitals, prescription data, and the final extracted AI analysis.
-3. **`ai_logs`**: An auditing collection that tracks all interactions and analyses performed by the LLM for compliance and history.
+## Environment Variables (EB Configuration)
 
-## Environment Variables required
-To run the server correctly, you must specify the following in `.env`:
-- `MONGO_URL`: MongoDB connection string.
-- `DB_NAME`: Database name.
-- `JWT_SECRET`: Secret key for JWT signing.
-- `EMERGENT_LLM_KEY`: API Key for the AI service.
-- `CORS_ORIGINS`: Allowed origins (e.g., frontend host URL).
+| Variable | Description |
+|---|---|
+| `MONGO_URL` | MongoDB Atlas connection string |
+| `DB_NAME` | Database name (`doco_ai`) |
+| `JWT_SECRET` | JWT signing secret |
+| `JWT_ALGORITHM` | `HS256` |
+| `JWT_EXPIRATION_HOURS` | `24` |
+| `GEMINI_API_KEY` | Google Gemini API key |
+| `CORS_ORIGINS` | Allowed frontend origin (Amplify URL) |
+| `AWS_ACCESS_KEY_ID` | S3 access key |
+| `AWS_SECRET_ACCESS_KEY` | S3 secret key |
+| `AWS_REGION` | `ap-south-1` |
+| `S3_BUCKET_NAME` | S3 bucket for uploads |
 
-## Architecture Flow
-1. **Frontend App** sends a `POST /auth/login` request.
-2. **FastAPI (`server.py`)** validates credentials with **MongoDB** and issues a JWT.
-3. The Doctor uploads patient details (`POST /cases/create`) and optional imagery (`POST /cases/upload-image`).
-4. The Doctor triggers AI analysis (`POST /ai/analyse-case`).
-5. **AI Service** passes an aggressively prompted context to **Gemini 3 Flash**. The structured response is logged to `ai_logs` and attached to the case in `cases` collection.
-6. The Doctor optionally requests a case report (`POST /reports/generate`), which invokes `ReportLab` to combine data and output a PDF to the `reports/` folder.
+---
+
+## Planned: RAG (Retrieval-Augmented Generation) Module
+
+### Goal
+Augment Gemini's clinical analysis with **domain-specific medical knowledge** — clinical guidelines, drug interactions, ICD-10 codes, and WHO protocols — retrieved in real-time from a vector database.
+
+### Proposed Architecture
+
+```
+Doctor triggers AI analysis
+        │
+        ▼
+RAG Pipeline
+  ├── 1. EMBED: Convert case query → vector embedding
+  │         (via Google text-embedding-004 model)
+  │
+  ├── 2. RETRIEVE: Search vector DB for top-K relevant docs
+  │         • Medical guidelines (WHO, ICMR)
+  │         • Drug interaction databases
+  │         • ICD-10 / symptom reference sheets
+  │
+  ├── 3. AUGMENT: Inject retrieved context into Gemini prompt
+  │
+  └── 4. GENERATE: Gemini 3 Flash produces grounded response
+```
+
+### Proposed Stack
+
+| Component | Technology | Hosting |
+|---|---|---|
+| Vector Database | **AWS OpenSearch** (with k-NN plugin) | AWS managed |
+| Embedding Model | Google `text-embedding-004` | Gemini API |
+| Document Ingestion | Python script (chunking + embedding) | Lambda / one-time job |
+| Knowledge Base | WHO guidelines, ICMR protocols, drug DBs | S3 → OpenSearch |
+| RAG Orchestration | **LangChain** or direct pymongo vector search | EB backend |
+
+### Alternative: MongoDB Atlas Vector Search
+MongoDB Atlas natively supports vector search — meaning **no new infrastructure** is needed. We can store embeddings directly in the `cases` or a new `knowledge_base` collection and query using Atlas Vector Search.
+
+**Recommended approach (lower cost):**
+1. Add `vector_embedding` field to `knowledge_base` collection in MongoDB Atlas
+2. Enable **Atlas Vector Search** index on the collection
+3. Embed medical documents using Google `text-embedding-004`
+4. At query time, embed the case context and run `$vectorSearch` against the knowledge base
+5. Inject top-5 retrieved chunks into the Gemini prompt
+
+### Implementation Plan (Phases)
+
+| Phase | Task | Effort |
+|---|---|---|
+| **Phase 1** | Build knowledge base ingestion script (PDF → chunks → embeddings → Atlas) | 2-3 days |
+| **Phase 2** | Enable Atlas Vector Search index on `knowledge_base` collection | 1 hour |
+| **Phase 3** | Add RAG retrieval function to `server.py` (embed query → $vectorSearch → augment prompt) | 1 day |
+| **Phase 4** | Test with WHO clinical guidelines and ICMR protocols | 1 day |
+| **Phase 5** | Add admin endpoint to upload new knowledge base documents | 1 day |

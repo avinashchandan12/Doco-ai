@@ -8,7 +8,7 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timezone, timedelta
 import jwt
@@ -18,6 +18,15 @@ import re
 import boto3
 from botocore.exceptions import ClientError
 import tempfile
+from abdm_crypto import ABDMCrypto
+from abdm_service import ABDMService
+from prescription_ai_service import (
+    get_clinical_context,
+    build_prescription_prompt,
+    generate_ai_prescription,
+    build_fhir_medication_requests,
+    generate_prescription_pdf,
+)
 
 # Load environment
 ROOT_DIR = Path(__file__).parent
@@ -37,6 +46,41 @@ JWT_EXPIRATION_HOURS = int(os.environ.get('JWT_EXPIRATION_HOURS', 24))
 # AWS S3 Config
 AWS_S3_BUCKET = os.environ.get('AWS_S3_BUCKET')  # None → fallback to local disk
 AWS_REGION = os.environ.get('AWS_REGION', 'ap-south-1')
+
+# AWS Bedrock RAG Config
+BEDROCK_KB_ID = os.environ.get('AWS_BEDROCK_KB_ID', '')
+BEDROCK_REGION = os.environ.get('AWS_BEDROCK_REGION', 'us-east-1')
+BEDROCK_TOP_K = int(os.environ.get('BEDROCK_RAG_TOP_K', '5'))
+BEDROCK_THRESHOLD = float(os.environ.get('BEDROCK_RELEVANCE_THRESHOLD', '0.70'))
+
+# ABDM V3 Config
+ABDM_CERT_URL = os.environ.get(
+    "ABDM_CERT_URL",
+    "https://abhasbx.abdm.gov.in/abha/api/v3/profile/public/certificate",
+)
+ABDM_ENROL_BY_AADHAAR_URL = os.environ.get(
+    "ABDM_ENROL_BY_AADHAAR_URL",
+    "https://abhasbx.abdm.gov.in/abha/api/v3/enrollment/enrol/byAadhaar",
+)
+ABDM_GATEWAY_TOKEN = os.environ.get("ABDM_GATEWAY_TOKEN", "")
+ABDM_X_CM_ID = os.environ.get("ABDM_X_CM_ID", "sbx")
+ABDM_REQUEST_TIMEOUT_SECONDS = float(os.environ.get("ABDM_REQUEST_TIMEOUT_SECONDS", "20"))
+ABDM_CERT_CACHE_TTL_SECONDS = int(os.environ.get("ABDM_CERT_CACHE_TTL_SECONDS", "900"))
+
+abdm_crypto = ABDMCrypto(
+    cert_url=ABDM_CERT_URL,
+    timeout_seconds=ABDM_REQUEST_TIMEOUT_SECONDS,
+    cert_cache_ttl_seconds=ABDM_CERT_CACHE_TTL_SECONDS,
+    auth_token=ABDM_GATEWAY_TOKEN,
+    x_cm_id=ABDM_X_CM_ID,
+)
+
+abdm_service = ABDMService(
+    enrol_by_aadhaar_url=ABDM_ENROL_BY_AADHAAR_URL,
+    gateway_token=ABDM_GATEWAY_TOKEN,
+    timeout_seconds=ABDM_REQUEST_TIMEOUT_SECONDS,
+    x_cm_id=ABDM_X_CM_ID,
+)
 
 def get_s3_client():
     """Return a boto3 S3 client. Uses IAM role on EB, or env keys locally."""
@@ -93,6 +137,11 @@ class DoctorSignup(BaseModel):
     password: str
     qualification: str
     location: str
+    hospital_name: Optional[str] = None
+    specialization: Optional[str] = None
+    contact: Optional[str] = None
+    reg_no: Optional[str] = None
+    website: Optional[str] = None
 
 class DoctorLogin(BaseModel):
     email: EmailStr
@@ -104,7 +153,22 @@ class DoctorResponse(BaseModel):
     email: str
     qualification: str
     location: str
+    hospital_name: Optional[str] = None
+    specialization: Optional[str] = None
+    contact: Optional[str] = None
+    reg_no: Optional[str] = None
+    website: Optional[str] = None
     created_at: str
+
+class DoctorProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    qualification: Optional[str] = None
+    location: Optional[str] = None
+    hospital_name: Optional[str] = None
+    specialization: Optional[str] = None
+    contact: Optional[str] = None
+    reg_no: Optional[str] = None
+    website: Optional[str] = None
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -117,6 +181,9 @@ class VitalsInput(BaseModel):
     pulse: Optional[str] = None
 
 class CaseCreate(BaseModel):
+    patient_name: Optional[str] = None
+    patient_age: Optional[str] = None
+    patient_gender: Optional[str] = None
     symptoms: List[str]
     duration: str
     vitals: VitalsInput
@@ -131,9 +198,23 @@ class AIAnalysisResult(BaseModel):
     prescription_review: List[str]
     next_steps: List[str]
 
+class GuidelineChunk(BaseModel):
+    title: str
+    content: str
+    source: str
+    source_url: Optional[str] = None
+    relevance_score: float
+
+class RAGMetadata(BaseModel):
+    rag_available: bool
+    chunks_retrieved: int
+
 class CaseResponse(BaseModel):
     id: str
     doctor_id: str
+    patient_name: Optional[str] = None
+    patient_age: Optional[str] = None
+    patient_gender: Optional[str] = None
     symptoms: List[str]
     duration: str
     vitals: dict
@@ -141,6 +222,8 @@ class CaseResponse(BaseModel):
     prescription_data: Optional[dict]
     image_url: Optional[str]
     ai_analysis: Optional[dict]
+    guidelines: Optional[List[dict]] = None
+    rag_metadata: Optional[dict] = None
     created_at: str
     updated_at: str
 
@@ -148,6 +231,107 @@ class PrescriptionExtractResponse(BaseModel):
     medications: List[dict]
     raw_text: str
     confidence: float
+
+
+class ABHAGenerateOTPRequest(BaseModel):
+    aadhaar_number: str = Field(..., pattern=r"^\d{12}$")
+
+
+class ABHAGenerateOTPResponse(BaseModel):
+    message: str
+    txnId: str
+
+
+class ABHATransactionRecord(BaseModel):
+    id: str
+    doctor_id: str
+    txnId: str
+    request_id: str
+    status: str
+    aadhaar_last4: str
+    created_at: str
+    updated_at: str
+
+
+class ContextMedicationItem(BaseModel):
+    name: str
+    dosage: str
+    recordedDate: str
+    clinicalStatus: str
+
+
+class ContextConditionItem(BaseModel):
+    name: str
+    clinicalStatus: str
+
+
+class ClinicalContext(BaseModel):
+    past_meds: List[ContextMedicationItem]
+    chronic_conditions: List[ContextConditionItem]
+
+
+class PrescriptionSuggestedMedication(BaseModel):
+    name: str
+    dosage: str
+    frequency: str
+    reason: str
+
+
+class PrescriptionAISuggestion(BaseModel):
+    suggested_medications: List[PrescriptionSuggestedMedication]
+    warnings: List[str]
+
+
+class PrescriptionSuggestRequest(BaseModel):
+    patient_id: str
+    session_id: str
+    symptoms: List[str] = Field(default_factory=list)
+    use_abha: bool = True
+    current_draft: Optional[Dict[str, Any]] = None
+
+
+class PrescriptionSuggestResponse(BaseModel):
+    prompt_type: str
+    clinical_context: ClinicalContext
+    ai_suggestion: PrescriptionAISuggestion
+    fhir_medication_requests: List[Dict[str, Any]]
+
+
+class PrescriptionAcceptRequest(BaseModel):
+    patient_id: str
+    session_id: str
+
+
+class PrescriptionAcceptResponse(BaseModel):
+    message: str
+    current_draft: PrescriptionAISuggestion
+    updated_at: str
+
+
+class PrescriptionPrintRequest(BaseModel):
+    patient_id: str
+    session_id: str
+    patient_name: Optional[str] = None
+    patient_age: Optional[str] = None
+    patient_gender: Optional[str] = None
+    abha_address: Optional[str] = None
+    free_text_notes: Optional[str] = None
+    abha_locker_url: Optional[str] = None
+
+
+class PrescriptionWorkspaceResponse(BaseModel):
+    patient_id: str
+    session_id: str
+    doctor_id: str
+    use_abha: Optional[bool] = True
+    symptoms: Optional[List[str]] = None
+    clinical_context: Optional[ClinicalContext] = None
+    prompt_type: Optional[str] = None
+    ai_suggestion: Optional[PrescriptionAISuggestion] = None
+    current_draft: Optional[PrescriptionAISuggestion] = None
+    fhir_medication_requests: Optional[List[Dict[str, Any]]] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 # ============== AUTH HELPERS ==============
 
@@ -185,8 +369,17 @@ async def get_current_doctor(credentials: HTTPAuthorizationCredentials = Depends
 # ============== AI SERVICE ==============
 
 async def analyze_case_with_ai(case_data: dict) -> dict:
-    """Use Google Gemini to analyze clinical case"""
+    """
+    Orchestrate: RAG retrieve → enriched prompt → Gemini generate.
+
+    Returns a dict with:
+      - ai_analysis: structured clinical analysis from Gemini
+      - guidelines: raw guideline chunks from Bedrock (shown to doctor)
+      - rag_metadata: { rag_available, chunks_retrieved }
+    """
     import google.generativeai as genai
+    from rag_service import retrieve_guidelines
+    from prompt_builder import build_enriched_prompt, build_basic_prompt
 
     # Support both GEMINI_API_KEY and legacy EMERGENT_LLM_KEY
     api_key = os.environ.get('GEMINI_API_KEY') or os.environ.get('EMERGENT_LLM_KEY')
@@ -194,44 +387,22 @@ async def analyze_case_with_ai(case_data: dict) -> dict:
         logger.error("No AI API key found (GEMINI_API_KEY or EMERGENT_LLM_KEY)")
         raise HTTPException(status_code=500, detail="AI service not configured")
 
-    system_prompt = """You are a senior experienced physician assisting a rural general practitioner.
-You are NOT diagnosing patients.
-You provide clinical decision support only.
-Use conservative, medically responsible language.
-Never provide definitive diagnoses.
-Always present possibilities, considerations, and safety-oriented red flags.
-Maintain professional doctor-to-doctor tone.
+    # ── Step 1: RAG retrieval (graceful fallback built into rag_service) ──
+    logger.info(f"Starting RAG retrieval for case {case_data.get('id', 'unknown')}")
+    guidelines, rag_available = await retrieve_guidelines(case_data)
+    logger.info(f"RAG result: available={rag_available}, chunks={len(guidelines)}")
 
-IMPORTANT: You MUST respond with ONLY valid JSON in this exact format, no additional text:
-{
-  "clinical_summary": "Brief summary of the case presentation",
-  "considerations": ["Consideration 1", "Consideration 2"],
-  "red_flags": ["Red flag 1 if any"],
-  "prescription_review": ["Review point 1 if prescription provided"],
-  "next_steps": ["Recommended next step 1", "Recommended next step 2"]
-}"""
+    # ── Step 2: Build prompt (enriched if RAG returned chunks, basic otherwise) ──
+    if guidelines:
+        system_prompt, user_prompt = build_enriched_prompt(case_data, guidelines)
+    else:
+        system_prompt, user_prompt = build_basic_prompt(case_data)
 
-    symptoms_str = ", ".join(case_data.get('symptoms', []))
-    vitals = case_data.get('vitals', {})
-    vitals_str = f"Temperature: {vitals.get('temperature', 'N/A')}, BP: {vitals.get('bp', 'N/A')}, Pulse: {vitals.get('pulse', 'N/A')}"
-
-    prescription_info = ""
-    if case_data.get('prescription_data'):
-        prescription_info = f"\nPrescription: {json.dumps(case_data['prescription_data'])}"
-
-    user_prompt = f"""Please analyze this clinical case:
-
-Symptoms: {symptoms_str}
-Duration: {case_data.get('duration', 'Not specified')}
-Vitals: {vitals_str}
-Clinical Notes: {case_data.get('clinical_notes', 'None provided')}{prescription_info}
-
-Generate a clinical decision support response in the exact JSON format specified."""
-
+    # ── Step 3: Call Gemini ──
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
+            model_name="gemini-3-flash-preview",
             system_instruction=system_prompt
         )
         response = model.generate_content(user_prompt)
@@ -241,7 +412,7 @@ Generate a clinical decision support response in the exact JSON format specified
         json_match = re.search(r'\{[\s\S]*\}', response_text)
         if json_match:
             result = json.loads(json_match.group())
-            return {
+            ai_analysis = {
                 "clinical_summary": result.get("clinical_summary", "Analysis completed"),
                 "considerations": result.get("considerations", []),
                 "red_flags": result.get("red_flags", []),
@@ -250,13 +421,22 @@ Generate a clinical decision support response in the exact JSON format specified
             }
         else:
             logger.error(f"Failed to parse AI response: {response_text}")
-            return {
+            ai_analysis = {
                 "clinical_summary": "AI analysis completed. Please review the case details.",
                 "considerations": ["Manual clinical review recommended"],
                 "red_flags": [],
                 "prescription_review": [],
                 "next_steps": ["Continue standard clinical evaluation"]
             }
+
+        return {
+            "ai_analysis": ai_analysis,
+            "guidelines": guidelines,
+            "rag_metadata": {
+                "rag_available": rag_available,
+                "chunks_retrieved": len(guidelines),
+            }
+        }
 
     except Exception as e:
         logger.error(f"AI analysis error: {str(e)}")
@@ -394,6 +574,11 @@ async def signup(data: DoctorSignup):
         "password": hash_password(data.password),
         "qualification": data.qualification,
         "location": data.location,
+        "hospital_name": data.hospital_name,
+        "specialization": data.specialization,
+        "contact": data.contact,
+        "reg_no": data.reg_no,
+        "website": data.website,
         "created_at": now
     }
     
@@ -409,6 +594,11 @@ async def signup(data: DoctorSignup):
             email=data.email,
             qualification=data.qualification,
             location=data.location,
+            hospital_name=data.hospital_name,
+            specialization=data.specialization,
+            contact=data.contact,
+            reg_no=data.reg_no,
+            website=data.website,
             created_at=now
         )
     )
@@ -432,6 +622,11 @@ async def login(data: DoctorLogin):
             email=doctor['email'],
             qualification=doctor['qualification'],
             location=doctor['location'],
+            hospital_name=doctor.get('hospital_name'),
+            specialization=doctor.get('specialization'),
+            contact=doctor.get('contact'),
+            reg_no=doctor.get('reg_no'),
+            website=doctor.get('website'),
             created_at=doctor['created_at']
         )
     )
@@ -446,8 +641,329 @@ async def get_profile(doctor: dict = Depends(get_current_doctor)):
         email=doctor['email'],
         qualification=doctor['qualification'],
         location=doctor['location'],
+        hospital_name=doctor.get('hospital_name'),
+        specialization=doctor.get('specialization'),
+        contact=doctor.get('contact'),
+        reg_no=doctor.get('reg_no'),
+        website=doctor.get('website'),
         created_at=doctor['created_at']
     )
+
+@api_router.put("/doctor/profile", response_model=DoctorResponse)
+async def update_doctor_profile(
+    data: DoctorProfileUpdate,
+    doctor: dict = Depends(get_current_doctor),
+):
+    """Update doctor profile / clinic settings."""
+    update_fields = {k: v for k, v in data.model_dump().items() if v is not None}
+    if not update_fields:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    now = datetime.now(timezone.utc).isoformat()
+    update_fields["updated_at"] = now
+    await db.doctors.update_one({"id": doctor["id"]}, {"$set": update_fields})
+    updated = await db.doctors.find_one({"id": doctor["id"]}, {"_id": 0})
+    return DoctorResponse(
+        id=updated["id"],
+        name=updated["name"],
+        email=updated["email"],
+        qualification=updated.get("qualification", ""),
+        location=updated.get("location", ""),
+        hospital_name=updated.get("hospital_name"),
+        specialization=updated.get("specialization"),
+        contact=updated.get("contact"),
+        reg_no=updated.get("reg_no"),
+        website=updated.get("website"),
+        created_at=updated["created_at"],
+    )
+
+# ============== ABHA / ABDM ROUTES ==============
+
+@api_router.post("/v3/abha/generate-otp", response_model=ABHAGenerateOTPResponse)
+async def generate_abha_otp(
+    data: ABHAGenerateOTPRequest,
+    doctor: dict = Depends(get_current_doctor),
+):
+    aadhaar_number = data.aadhaar_number
+
+    try:
+        encrypted_aadhaar = await abdm_crypto.encrypt(aadhaar_number)
+    except Exception as exc:
+        logger.error(f"ABDM encryption error: {str(exc)}")
+        raise HTTPException(status_code=502, detail="Failed to encrypt Aadhaar for ABDM")
+
+    response_data, request_id = await abdm_service.enrol_by_aadhaar(encrypted_aadhaar)
+    txn_id = response_data.get("txnId") or response_data.get("txn_id")
+
+    if not txn_id:
+        logger.error(f"ABDM response missing txnId for request_id={request_id}")
+        raise HTTPException(status_code=502, detail="ABDM response missing transaction ID")
+
+    now = datetime.now(timezone.utc).isoformat()
+    txn_record = ABHATransactionRecord(
+        id=str(uuid.uuid4()),
+        doctor_id=doctor["id"],
+        txnId=txn_id,
+        request_id=request_id,
+        status="OTP_SENT",
+        aadhaar_last4=aadhaar_number[-4:],
+        created_at=now,
+        updated_at=now,
+    )
+    await db.abha_transactions.insert_one(txn_record.model_dump())
+
+    return ABHAGenerateOTPResponse(
+        message="OTP sent to Aadhaar-linked mobile",
+        txnId=txn_id,
+    )
+
+
+# ============== PRESCRIPTION AI ROUTES ==============
+
+@api_router.post("/prescriptions/suggest", response_model=PrescriptionSuggestResponse)
+async def suggest_prescription(
+    data: PrescriptionSuggestRequest,
+    doctor: dict = Depends(get_current_doctor),
+):
+    clinical_context_raw = await get_clinical_context(
+        patient_id=data.patient_id,
+        session_id=data.session_id,
+        use_abha=data.use_abha,
+        db=db,
+    )
+    prompt_type, prompt_text = build_prescription_prompt(
+        symptoms=data.symptoms,
+        clinical_context=clinical_context_raw,
+        use_abha=data.use_abha,
+    )
+    ai_suggestion_raw = await generate_ai_prescription(prompt_text)
+    fhir_requests = build_fhir_medication_requests(
+        suggested_medications=ai_suggestion_raw.get("suggested_medications", []),
+        patient_id=data.patient_id,
+        session_id=data.session_id,
+    )
+
+    clinical_context = ClinicalContext(
+        past_meds=[ContextMedicationItem(**item) for item in clinical_context_raw.get("past_meds", [])],
+        chronic_conditions=[ContextConditionItem(**item) for item in clinical_context_raw.get("chronic_conditions", [])],
+    )
+    ai_suggestion = PrescriptionAISuggestion(**ai_suggestion_raw)
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.prescription_workspaces.update_one(
+        {
+            "patient_id": data.patient_id,
+            "session_id": data.session_id,
+            "doctor_id": doctor["id"],
+        },
+        {
+            "$set": {
+                "patient_id": data.patient_id,
+                "session_id": data.session_id,
+                "doctor_id": doctor["id"],
+                "use_abha": data.use_abha,
+                "symptoms": data.symptoms,
+                "clinical_context": clinical_context.model_dump(),
+                "prompt_type": prompt_type,
+                "ai_suggestion": ai_suggestion.model_dump(),
+                "fhir_medication_requests": fhir_requests,
+                "updated_at": now,
+            },
+            "$setOnInsert": {
+                "id": str(uuid.uuid4()),
+                "created_at": now,
+            },
+        },
+        upsert=True,
+    )
+
+    if data.current_draft is not None:
+        await db.prescription_workspaces.update_one(
+            {
+                "patient_id": data.patient_id,
+                "session_id": data.session_id,
+                "doctor_id": doctor["id"],
+            },
+            {"$set": {"current_draft": data.current_draft, "updated_at": now}},
+        )
+
+    return PrescriptionSuggestResponse(
+        prompt_type=prompt_type,
+        clinical_context=clinical_context,
+        ai_suggestion=ai_suggestion,
+        fhir_medication_requests=fhir_requests,
+    )
+
+
+@api_router.post("/prescriptions/accept", response_model=PrescriptionAcceptResponse)
+async def accept_prescription_suggestion(
+    data: PrescriptionAcceptRequest,
+    doctor: dict = Depends(get_current_doctor),
+):
+    workspace = await db.prescription_workspaces.find_one(
+        {
+            "patient_id": data.patient_id,
+            "session_id": data.session_id,
+            "doctor_id": doctor["id"],
+        },
+        {"_id": 0},
+    )
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Prescription workspace not found")
+
+    ai_suggestion_raw = workspace.get("ai_suggestion")
+    if not ai_suggestion_raw:
+        raise HTTPException(status_code=400, detail="No AI suggestion available to accept")
+
+    ai_suggestion = PrescriptionAISuggestion(**ai_suggestion_raw)
+    now = datetime.now(timezone.utc).isoformat()
+    await db.prescription_workspaces.update_one(
+        {
+            "patient_id": data.patient_id,
+            "session_id": data.session_id,
+            "doctor_id": doctor["id"],
+        },
+        {
+            "$set": {
+                "current_draft": ai_suggestion.model_dump(),
+                "updated_at": now,
+            }
+        },
+    )
+
+    return PrescriptionAcceptResponse(
+        message="AI suggestion accepted and current draft updated",
+        current_draft=ai_suggestion,
+        updated_at=now,
+    )
+
+
+@api_router.get("/prescriptions/workspace/{patient_id}/{session_id}", response_model=PrescriptionWorkspaceResponse)
+async def get_prescription_workspace(
+    patient_id: str,
+    session_id: str,
+    doctor: dict = Depends(get_current_doctor),
+):
+    """Fetch the stored prescription workspace (draft, suggestion, context) for a patient session."""
+    workspace = await db.prescription_workspaces.find_one(
+        {
+            "patient_id": patient_id,
+            "session_id": session_id,
+            "doctor_id": doctor["id"],
+        },
+        {"_id": 0},
+    )
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Prescription workspace not found")
+
+    # Coerce nested models safely
+    clinical_context_raw = workspace.get("clinical_context")
+    clinical_context = None
+    if clinical_context_raw:
+        try:
+            clinical_context = ClinicalContext(**clinical_context_raw)
+        except Exception:
+            clinical_context = None
+
+    ai_suggestion_raw = workspace.get("ai_suggestion")
+    ai_suggestion = None
+    if ai_suggestion_raw:
+        try:
+            ai_suggestion = PrescriptionAISuggestion(**ai_suggestion_raw)
+        except Exception:
+            ai_suggestion = None
+
+    current_draft_raw = workspace.get("current_draft")
+    current_draft = None
+    if current_draft_raw:
+        try:
+            current_draft = PrescriptionAISuggestion(**current_draft_raw)
+        except Exception:
+            current_draft = None
+
+    return PrescriptionWorkspaceResponse(
+        patient_id=workspace["patient_id"],
+        session_id=workspace["session_id"],
+        doctor_id=workspace["doctor_id"],
+        use_abha=workspace.get("use_abha", True),
+        symptoms=workspace.get("symptoms"),
+        clinical_context=clinical_context,
+        prompt_type=workspace.get("prompt_type"),
+        ai_suggestion=ai_suggestion,
+        current_draft=current_draft,
+        fhir_medication_requests=workspace.get("fhir_medication_requests"),
+        created_at=workspace.get("created_at"),
+        updated_at=workspace.get("updated_at"),
+    )
+
+
+@api_router.post("/prescriptions/print")
+async def print_prescription(
+    data: PrescriptionPrintRequest,
+    doctor: dict = Depends(get_current_doctor),
+):
+    """Generate an ABDM-compliant prescription PDF with QR code and return a download URL."""
+    workspace = await db.prescription_workspaces.find_one(
+        {
+            "patient_id": data.patient_id,
+            "session_id": data.session_id,
+            "doctor_id": doctor["id"],
+        },
+        {"_id": 0},
+    )
+    if not workspace:
+        # Allow printing even without a saved workspace (manual prescription only mode)
+        workspace = {}
+
+    patient_info = {
+        "patient_id": data.patient_id,
+        "patient_name": data.patient_name or "Unknown",
+        "patient_age": data.patient_age or "N/A",
+        "patient_gender": data.patient_gender or "N/A",
+        "abha_address": data.abha_address or "",
+        "free_text_notes": data.free_text_notes or "",
+    }
+
+    doctor_info = {
+        "name": doctor.get("name", "Doctor"),
+        "qualification": doctor.get("qualification", ""),
+        "location": doctor.get("location", ""),
+        "reg_no": doctor.get("reg_no", "Reg. No. N/A"),
+    }
+
+    qr_url = (
+        data.abha_locker_url
+        or f"https://abdm.gov.in/healthlocker?patient={data.patient_id}"
+    )
+
+    try:
+        if AWS_S3_BUCKET:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                pdf_path = generate_prescription_pdf(
+                    workspace=workspace,
+                    patient_info=patient_info,
+                    doctor_info=doctor_info,
+                    qr_url=qr_url,
+                    output_dir=tmpdir,
+                )
+                pdf_filename = Path(pdf_path).name
+                s3_key = f"prescriptions/{pdf_filename}"
+                with open(pdf_path, "rb") as f:
+                    upload_to_s3(f.read(), s3_key, "application/pdf")
+            presigned_url = get_presigned_url(s3_key)
+            return {"pdf_url": presigned_url, "pdf_filename": pdf_filename}
+        else:
+            pdf_path = generate_prescription_pdf(
+                workspace=workspace,
+                patient_info=patient_info,
+                doctor_info=doctor_info,
+                qr_url=qr_url,
+            )
+            pdf_filename = Path(pdf_path).name
+            return {"pdf_url": f"/api/reports/download/{pdf_filename}", "pdf_filename": pdf_filename}
+    except Exception as exc:
+        logger.error(f"Prescription PDF generation failed: {exc}")
+        raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(exc)}")
+
 
 # ============== CASE ROUTES ==============
 
@@ -459,6 +975,9 @@ async def create_case(data: CaseCreate, doctor: dict = Depends(get_current_docto
     case_doc = {
         "id": case_id,
         "doctor_id": doctor['id'],
+        "patient_name": data.patient_name,
+        "patient_age": data.patient_age,
+        "patient_gender": data.patient_gender,
         "symptoms": data.symptoms,
         "duration": data.duration,
         "vitals": data.vitals.model_dump(),
@@ -561,27 +1080,37 @@ async def analyse_case(case_id: str, doctor: dict = Depends(get_current_doctor))
     case = await db.cases.find_one({"id": case_id, "doctor_id": doctor['id']}, {"_id": 0})
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
-    
-    # Run AI analysis
-    ai_result = await analyze_case_with_ai(case)
-    
-    # Update case with AI analysis
+
+    # Run RAG + AI analysis pipeline
+    result = await analyze_case_with_ai(case)
+    ai_analysis = result["ai_analysis"]
+    guidelines = result["guidelines"]
+    rag_metadata = result["rag_metadata"]
+
+    # Update case with AI analysis, guidelines, and RAG metadata
     now = datetime.now(timezone.utc).isoformat()
     await db.cases.update_one(
         {"id": case_id},
-        {"$set": {"ai_analysis": ai_result, "updated_at": now}}
+        {"$set": {
+            "ai_analysis": ai_analysis,
+            "guidelines": guidelines,
+            "rag_metadata": rag_metadata,
+            "updated_at": now
+        }}
     )
-    
-    # Log AI interaction
+
+    # Log AI interaction (includes RAG metadata for audit)
     log_doc = {
         "id": str(uuid.uuid4()),
         "case_id": case_id,
         "doctor_id": doctor['id'],
-        "analysis": ai_result,
+        "analysis": ai_analysis,
+        "guidelines_count": len(guidelines),
+        "rag_available": rag_metadata.get("rag_available", False),
         "created_at": now
     }
     await db.ai_logs.insert_one(log_doc)
-    
+
     # Return updated case
     updated_case = await db.cases.find_one({"id": case_id}, {"_id": 0})
     return CaseResponse(**updated_case)

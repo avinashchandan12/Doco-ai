@@ -11,6 +11,9 @@ import NewCasePage from "@/pages/NewCasePage";
 import AIOutputPage from "@/pages/AIOutputPage";
 import ReportViewPage from "@/pages/ReportViewPage";
 import CaseHistoryPage from "@/pages/CaseHistoryPage";
+import PrescriptionPage from "@/pages/PrescriptionPage";
+import PrescriptionPrintPage from "@/pages/PrescriptionPrintPage";
+import SettingsPage from "@/pages/SettingsPage";
 
 // Auth Context
 const AuthContext = createContext(null);
@@ -64,7 +67,7 @@ const AuthProvider = ({ children }) => {
 // Protected Route
 const ProtectedRoute = ({ children }) => {
   const { isAuthenticated, loading } = useAuth();
-  
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -72,18 +75,18 @@ const ProtectedRoute = ({ children }) => {
       </div>
     );
   }
-  
+
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
   }
-  
+
   return children;
 };
 
 // Public Route (redirect if authenticated)
 const PublicRoute = ({ children }) => {
   const { isAuthenticated, loading } = useAuth();
-  
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -91,11 +94,11 @@ const PublicRoute = ({ children }) => {
       </div>
     );
   }
-  
+
   if (isAuthenticated) {
     return <Navigate to="/dashboard" replace />;
   }
-  
+
   return children;
 };
 
@@ -112,6 +115,9 @@ function App() {
           <Route path="/case/:caseId/analysis" element={<ProtectedRoute><AIOutputPage /></ProtectedRoute>} />
           <Route path="/case/:caseId/report" element={<ProtectedRoute><ReportViewPage /></ProtectedRoute>} />
           <Route path="/history" element={<ProtectedRoute><CaseHistoryPage /></ProtectedRoute>} />
+          <Route path="/prescription" element={<ProtectedRoute><PrescriptionPage /></ProtectedRoute>} />
+          <Route path="/prescription/print" element={<ProtectedRoute><PrescriptionPrintPage /></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
         </Routes>
         <Toaster position="top-right" richColors />
       </BrowserRouter>

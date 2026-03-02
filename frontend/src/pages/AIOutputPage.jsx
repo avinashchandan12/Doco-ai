@@ -6,10 +6,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { 
-  ArrowLeft, FileText, Edit, Download, RefreshCw, 
-  AlertTriangle, CheckCircle, Lightbulb, Pill, 
-  ChevronRight, Loader2, Stethoscope, Calendar, Clock
+import {
+  ArrowLeft, FileText, Edit, Download, RefreshCw,
+  AlertTriangle, CheckCircle, Lightbulb, Pill,
+  ChevronRight, ChevronDown, ChevronUp, Loader2,
+  Stethoscope, Calendar, BookOpen, ShieldCheck, FileSignature
 } from "lucide-react";
 
 const AIOutputPage = () => {
@@ -19,6 +20,7 @@ const AIOutputPage = () => {
   const [loading, setLoading] = useState(true);
   const [rerunning, setRerunning] = useState(false);
   const [generatingReport, setGeneratingReport] = useState(false);
+  const [guidelinesOpen, setGuidelinesOpen] = useState(true);
 
   useEffect(() => {
     fetchCase();
@@ -86,6 +88,19 @@ const AIOutputPage = () => {
   }
 
   const analysis = caseData.ai_analysis;
+  const guidelines = caseData.guidelines || [];
+  const ragMeta = caseData.rag_metadata || {};
+  const ragAvailable = ragMeta.rag_available !== false; // true by default if field absent
+
+  // Source badge colour mapping
+  const sourceBadgeClass = (source) => {
+    if (!source) return "bg-slate-100 text-slate-700";
+    const s = source.toUpperCase();
+    if (s.includes("WHO")) return "bg-blue-100 text-blue-800";
+    if (s.includes("ICMR")) return "bg-green-100 text-green-800";
+    if (s.includes("DRUG")) return "bg-purple-100 text-purple-800";
+    return "bg-slate-100 text-slate-700";
+  };
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -196,6 +211,15 @@ const AIOutputPage = () => {
                     <RefreshCw className="w-4 h-4 mr-2" />
                   )}
                   Re-run Analysis
+                </Button>
+                <Button
+                  variant="outline"
+                  className="w-full border-teal-300 text-teal-700 hover:bg-teal-50"
+                  onClick={() => navigate("/prescription")}
+                  data-testid="write-prescription-btn"
+                >
+                  <FileSignature className="w-4 h-4 mr-2" />
+                  Write Prescription
                 </Button>
               </CardContent>
             </Card>
@@ -317,6 +341,92 @@ const AIOutputPage = () => {
                     </CardContent>
                   </Card>
                 )}
+
+                {/* Clinical Guidelines — RAG section */}
+                {analysis && (
+                  <Card className="border-indigo-200">
+                    <CardHeader
+                      className="pb-3 bg-indigo-50 cursor-pointer select-none"
+                      onClick={() => setGuidelinesOpen((o) => !o)}
+                    >
+                      <CardTitle className="text-base flex items-center justify-between gap-2 text-indigo-800">
+                        <div className="flex items-center gap-2">
+                          <BookOpen className="w-4 h-4" />
+                          Clinical Guidelines Retrieved
+                          {guidelines.length > 0 && (
+                            <span className="ml-1 text-xs font-normal px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
+                              {guidelines.length} source{guidelines.length !== 1 ? "s" : ""}
+                            </span>
+                          )}
+                        </div>
+                        {guidelinesOpen ? (
+                          <ChevronUp className="w-4 h-4 text-indigo-500" />
+                        ) : (
+                          <ChevronDown className="w-4 h-4 text-indigo-500" />
+                        )}
+                      </CardTitle>
+                    </CardHeader>
+
+                    {guidelinesOpen && (
+                      <CardContent className="pt-4 space-y-4">
+                        {/* RAG unavailable banner */}
+                        {!ragAvailable && (
+                          <div className="flex items-start gap-3 p-3 rounded-lg bg-yellow-50 border border-yellow-200">
+                            <AlertTriangle className="w-4 h-4 text-yellow-600 flex-shrink-0 mt-0.5" />
+                            <p className="text-sm text-yellow-800">
+                              <strong>Guidelines database temporarily unavailable.</strong>{" "}
+                              AI analysis shown without guideline grounding. Please verify recommendations against current clinical guidelines.
+                            </p>
+                          </div>
+                        )}
+
+                        {guidelines.length === 0 && ragAvailable && (
+                          <p className="text-sm text-slate-500 italic">
+                            No matching guidelines were retrieved for this case.
+                          </p>
+                        )}
+
+                        {guidelines.map((chunk, idx) => (
+                          <div
+                            key={idx}
+                            className="rounded-lg border border-indigo-100 bg-white p-4 space-y-2"
+                            data-testid={`guideline-chunk-${idx}`}
+                          >
+                            <div className="flex items-start justify-between gap-2 flex-wrap">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <ShieldCheck className="w-4 h-4 text-indigo-500 flex-shrink-0" />
+                                <span className="font-medium text-sm text-slate-800">
+                                  {chunk.title || "Clinical Guideline"}
+                                </span>
+                                <span
+                                  className={`text-xs font-medium px-2 py-0.5 rounded-full ${sourceBadgeClass(chunk.source)
+                                    }`}
+                                >
+                                  {chunk.source || "Guidelines"}
+                                </span>
+                              </div>
+                              <span className="text-xs font-medium text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full whitespace-nowrap">
+                                {Math.round((chunk.relevance_score || 0) * 100)}% match
+                              </span>
+                            </div>
+
+                            <p className="text-sm text-slate-600 leading-relaxed">
+                              {chunk.content?.length > 400
+                                ? chunk.content.slice(0, 400) + "…"
+                                : chunk.content}
+                            </p>
+
+                            {chunk.source_url && (
+                              <p className="text-xs text-slate-400 truncate">
+                                📄 {chunk.source_url.split("/").pop()}
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                      </CardContent>
+                    )}
+                  </Card>
+                )}
               </>
             )}
 
@@ -325,7 +435,7 @@ const AIOutputPage = () => {
               <div className="flex gap-3">
                 <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0" />
                 <p className="text-sm text-amber-800">
-                  <strong>Disclaimer:</strong> This AI analysis provides clinical decision support only. 
+                  <strong>Disclaimer:</strong> This AI analysis provides clinical decision support only.
                   It does not constitute a diagnosis. Final medical judgment rests with the treating physician.
                 </p>
               </div>
