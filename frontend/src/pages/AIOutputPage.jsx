@@ -10,8 +10,10 @@ import {
   ArrowLeft, FileText, Edit, Download, RefreshCw,
   AlertTriangle, CheckCircle, Lightbulb, Pill,
   ChevronRight, ChevronDown, ChevronUp, Loader2,
-  Stethoscope, Calendar, BookOpen, ShieldCheck, FileSignature
+  Stethoscope, Calendar, BookOpen, ShieldCheck, FileSignature,
+  MessageSquare, Sparkles, Image as ImageIcon
 } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
 
 const AIOutputPage = () => {
   const { caseId } = useParams();
@@ -21,6 +23,8 @@ const AIOutputPage = () => {
   const [rerunning, setRerunning] = useState(false);
   const [generatingReport, setGeneratingReport] = useState(false);
   const [guidelinesOpen, setGuidelinesOpen] = useState(true);
+  const [doctorBrainstorm, setDoctorBrainstorm] = useState("");
+  const [enhancing, setEnhancing] = useState(false);
 
   useEffect(() => {
     fetchCase();
@@ -48,6 +52,24 @@ const AIOutputPage = () => {
       toast.error("Failed to re-run analysis");
     } finally {
       setRerunning(false);
+    }
+  };
+
+  const handleEnhanceAnalysis = async () => {
+    if (!doctorBrainstorm.trim()) {
+      toast.error("Please enter your observations before enhancing.");
+      return;
+    }
+    setEnhancing(true);
+    try {
+      await aiAPI.analyseCase(caseId, doctorBrainstorm.trim());
+      toast.success("Analysis enhanced with your context!");
+      setDoctorBrainstorm("");
+      fetchCase();
+    } catch (error) {
+      toast.error("Failed to enhance analysis");
+    } finally {
+      setEnhancing(false);
     }
   };
 
@@ -215,7 +237,16 @@ const AIOutputPage = () => {
                 <Button
                   variant="outline"
                   className="w-full border-teal-300 text-teal-700 hover:bg-teal-50"
-                  onClick={() => navigate("/prescription")}
+                  onClick={() =>
+                    navigate("/prescription", {
+                      state: {
+                        patientName: caseData.patient_name || "",
+                        patientAge: caseData.patient_age || "",
+                        patientGender: caseData.patient_gender || "",
+                        caseId: caseData.id,
+                      },
+                    })
+                  }
                   data-testid="write-prescription-btn"
                 >
                   <FileSignature className="w-4 h-4 mr-2" />
@@ -252,6 +283,39 @@ const AIOutputPage = () => {
                     </p>
                   </CardContent>
                 </Card>
+
+                {/* Visual Findings (Image Analysis) */}
+                {caseData.image_url && analysis.image_findings?.length > 0 && (
+                  <Card className="border-blue-200 overflow-hidden">
+                    <CardHeader className="pb-3 bg-blue-50">
+                      <CardTitle className="text-base flex items-center gap-2 text-blue-700">
+                        <ImageIcon className="w-4 h-4" />
+                        Visual Findings (AI Image Analysis)
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="pt-4">
+                      <div className="flex flex-col sm:flex-row gap-6">
+                        <div className="sm:w-1/3 shrink-0">
+                          <img
+                            src={caseData.image_url}
+                            alt="Uploaded clinical image"
+                            className="w-full h-auto rounded-lg border border-slate-200 object-cover max-h-48"
+                          />
+                        </div>
+                        <div className="sm:w-2/3">
+                          <ul className="space-y-3" data-testid="image-findings-list">
+                            {analysis.image_findings.map((item, idx) => (
+                              <li key={idx} className="flex items-start gap-3">
+                                <ChevronRight className="w-4 h-4 text-blue-500 mt-0.5 flex-shrink-0" />
+                                <span className="text-slate-700 text-sm leading-relaxed">{item}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
 
                 {/* Considerations */}
                 {analysis.considerations?.length > 0 && (
@@ -428,6 +492,61 @@ const AIOutputPage = () => {
                   </Card>
                 )}
               </>
+            )}
+
+            {/* Doctor Brainstorm */}
+            {analysis && (
+              <Card className="border-teal-200">
+                <CardHeader className="pb-3 bg-gradient-to-r from-teal-50 to-emerald-50">
+                  <CardTitle className="text-base flex items-center gap-2 text-teal-800">
+                    <MessageSquare className="w-4 h-4" />
+                    Doctor&apos;s Brainstorm
+                  </CardTitle>
+                  <p className="text-xs text-teal-600 mt-0.5">
+                    Add your observations or questions — AI will incorporate them into a refined analysis.
+                  </p>
+                </CardHeader>
+                <CardContent className="pt-4 space-y-3">
+                  <Textarea
+                    placeholder="e.g. Patient also has Type-2 Diabetes and the fever is recurring every evening. Family history of TB. Want deeper differential on the breathlessness..."
+                    value={doctorBrainstorm}
+                    onChange={(e) => setDoctorBrainstorm(e.target.value)}
+                    rows={4}
+                    className="resize-none text-sm border-teal-200 focus:border-teal-400"
+                    data-testid="doctor-brainstorm-input"
+                  />
+                  <div className="flex gap-2">
+                    <Button
+                      className="flex-1 gap-2 bg-teal-600 hover:bg-teal-700"
+                      onClick={handleEnhanceAnalysis}
+                      disabled={enhancing || !doctorBrainstorm.trim()}
+                      data-testid="enhance-analysis-btn"
+                    >
+                      {enhancing ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Enhancing...
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-4 h-4" />
+                          Enhance Analysis
+                        </>
+                      )}
+                    </Button>
+                    {doctorBrainstorm.trim() && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setDoctorBrainstorm("")}
+                        className="shrink-0 text-xs"
+                      >
+                        Clear
+                      </Button>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
             )}
 
             {/* Disclaimer */}

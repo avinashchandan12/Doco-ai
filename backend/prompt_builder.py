@@ -9,7 +9,7 @@ Token budget: RAG context is capped at ~6,000 characters to avoid overflowing
 Gemini's context window with the rest of the prompt.
 """
 import json
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -32,6 +32,7 @@ IMPORTANT: You MUST respond with ONLY valid JSON in this exact format, no additi
   "clinical_summary": "Brief summary of the case presentation, noting which guidelines were applied",
   "considerations": ["Consideration 1", "Consideration 2"],
   "red_flags": ["Red flag 1 if any"],
+  "image_findings": ["Visual observation 1 if an image was provided", "Observation 2"],
   "prescription_review": ["Review point 1 if prescription provided"],
   "next_steps": ["Recommended next step 1", "Recommended next step 2"]
 }"""
@@ -52,6 +53,7 @@ IMPORTANT: You MUST respond with ONLY valid JSON in this exact format, no additi
   "clinical_summary": "Brief summary of the case presentation",
   "considerations": ["Consideration 1", "Consideration 2"],
   "red_flags": ["Red flag 1 if any"],
+  "image_findings": ["Visual observation 1 if an image was provided", "Observation 2"],
   "prescription_review": ["Review point 1 if prescription provided"],
   "next_steps": ["Recommended next step 1", "Recommended next step 2"]
 }"""
@@ -127,9 +129,31 @@ def _format_guideline_chunks(chunks: List[Dict[str, Any]]) -> str:
 # Public API
 # ---------------------------------------------------------------------------
 
-def build_enriched_prompt(case_data: dict, chunks: List[Dict[str, Any]]) -> tuple[str, str]:
+def _format_doctor_followup(doctor_context: str, previous_analysis: Optional[dict]) -> str:
+    """Format the doctor's follow-up brainstorm section."""
+    prev_json = json.dumps(previous_analysis, indent=2) if previous_analysis else "(none)"
+    return (
+        "\n---\n\n"
+        "PREVIOUS AI ANALYSIS (for context):\n"
+        f"{prev_json}\n\n"
+        "DOCTOR FOLLOW-UP / ADDITIONAL OBSERVATIONS:\n"
+        f"{doctor_context}\n\n"
+        "Please build upon the previous analysis above, incorporating the doctor's new observations. "
+        "Refine and enhance the clinical decision support response. "
+        "Return the complete updated response in the exact JSON format specified."
+    )
+
+
+def build_enriched_prompt(
+    case_data: dict,
+    chunks: List[Dict[str, Any]],
+    doctor_context: Optional[str] = None,
+    previous_analysis: Optional[dict] = None,
+) -> tuple[str, str]:
     """
     Build a RAG-augmented prompt for Gemini.
+    Optionally includes doctor follow-up context and the previous AI analysis
+    for iterative brainstorming.
 
     Returns:
         (system_prompt, user_prompt) tuple ready for genai.GenerativeModel
@@ -147,12 +171,20 @@ PATIENT CASE:
 Generate a clinical decision support response in the exact JSON format specified.
 Where applicable, reference the specific guideline you are drawing from."""
 
+    if doctor_context:
+        user_prompt += _format_doctor_followup(doctor_context, previous_analysis)
+
     return SYSTEM_PROMPT, user_prompt
 
 
-def build_basic_prompt(case_data: dict) -> tuple[str, str]:
+def build_basic_prompt(
+    case_data: dict,
+    doctor_context: Optional[str] = None,
+    previous_analysis: Optional[dict] = None,
+) -> tuple[str, str]:
     """
     Build a basic prompt (no RAG context) — used when Bedrock is unavailable.
+    Optionally includes doctor follow-up context for iterative brainstorming.
 
     Returns:
         (system_prompt, user_prompt) tuple
@@ -164,5 +196,8 @@ def build_basic_prompt(case_data: dict) -> tuple[str, str]:
 {case_block}
 
 Generate a clinical decision support response in the exact JSON format specified."""
+
+    if doctor_context:
+        user_prompt += _format_doctor_followup(doctor_context, previous_analysis)
 
     return SYSTEM_PROMPT_NO_RAG, user_prompt

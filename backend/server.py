@@ -333,6 +333,11 @@ class PrescriptionWorkspaceResponse(BaseModel):
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
+
+class AnalyseCaseBody(BaseModel):
+    """Optional request body for /ai/analyse-case. Enables doctor brainstorm iteration."""
+    doctor_context: Optional[str] = None
+
 # ============== AUTH HELPERS ==============
 
 def hash_password(password: str) -> str:
@@ -368,7 +373,7 @@ async def get_current_doctor(credentials: HTTPAuthorizationCredentials = Depends
 
 # ============== AI SERVICE ==============
 
-async def analyze_case_with_ai(case_data: dict) -> dict:
+async def analyze_case_with_ai(case_data: dict, doctor_context: Optional[str] = None) -> dict:
     """
     Orchestrate: RAG retrieve → enriched prompt → Gemini generate.
 
@@ -392,20 +397,79 @@ async def analyze_case_with_ai(case_data: dict) -> dict:
     guidelines, rag_available = await retrieve_guidelines(case_data)
     logger.info(f"RAG result: available={rag_available}, chunks={len(guidelines)}")
 
+    # Get previous analysis for brainstorm context
+    previous_analysis = case_data.get("ai_analysis") if doctor_context else None
+
     # ── Step 2: Build prompt (enriched if RAG returned chunks, basic otherwise) ──
     if guidelines:
-        system_prompt, user_prompt = build_enriched_prompt(case_data, guidelines)
+        system_prompt, user_prompt = build_enriched_prompt(
+            case_data, guidelines,
+            doctor_context=doctor_context,
+            previous_analysis=previous_analysis,
+        )
     else:
-        system_prompt, user_prompt = build_basic_prompt(case_data)
+        system_prompt, user_prompt = build_basic_prompt(
+            case_data,
+            doctor_context=doctor_context,
+            previous_analysis=previous_analysis,
+        )
 
-    # ── Step 3: Call Gemini ──
+    # ── Step 3: Fetch image if present ──
+    input_content = [user_prompt]
+    image_url = case_data.get("image_url")
+    
+    if image_url:
+        logger.info(f"Image found for case: {image_url}")
+        try:
+            image_bytes = None
+            if image_url.startswith("/api/uploads/"):
+                # Local development fallback
+                filename = image_url.split("/")[-1]
+                file_path = ROOT_DIR / "uploads" / filename
+                if file_path.exists():
+                    with open(file_path, "rb") as f:
+                        image_bytes = f.read()
+            elif image_url.startswith("http") and AWS_S3_BUCKET:
+                # S3 (assuming it's a pre-signed URL or public URL; for simplicity, we 
+                # can just download it via requests if it's accessible or use boto3 if it's our bucket)
+                # Parse the key from the doco-ai-uploads URL
+                import urllib.parse
+                s3_key = urllib.parse.urlparse(image_url).path.lstrip("/")
+                s3_client = boto3.client(
+                    "s3", 
+                    region_name=os.environ.get("AWS_REGION", "ap-south-1"),
+                    aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+                    aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY")
+                )
+                response = s3_client.get_object(Bucket=AWS_S3_BUCKET, Key=s3_key)
+                image_bytes = response['Body'].read()
+
+            if image_bytes:
+                # Determine mime type naively from URL
+                mime_type = "image/jpeg"
+                if image_url.lower().endswith(".png"):
+                    mime_type = "image/png"
+                elif image_url.lower().endswith(".webp"):
+                    mime_type = "image/webp"
+
+                input_content.insert(0, {
+                    "mime_type": mime_type,
+                    "data": image_bytes
+                })
+                logger.info("Successfully attached image to Gemini prompt")
+            else:
+                logger.warning(f"Could not load image bytes for {image_url}")
+        except Exception as img_err:
+            logger.error(f"Failed to fetch image for analysis: {img_err}")
+
+    # ── Step 4: Call Gemini ──
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(
-            model_name="gemini-3-flash-preview",
+            model_name="gemini-3-flash-preview", # Fallback to a vision-capable standard model if this preview fails
             system_instruction=system_prompt
         )
-        response = model.generate_content(user_prompt)
+        response = model.generate_content(input_content)
         response_text = response.text
 
         # Parse JSON from response
@@ -416,6 +480,7 @@ async def analyze_case_with_ai(case_data: dict) -> dict:
                 "clinical_summary": result.get("clinical_summary", "Analysis completed"),
                 "considerations": result.get("considerations", []),
                 "red_flags": result.get("red_flags", []),
+                "image_findings": result.get("image_findings", []),
                 "prescription_review": result.get("prescription_review", []),
                 "next_steps": result.get("next_steps", [])
             }
@@ -425,6 +490,7 @@ async def analyze_case_with_ai(case_data: dict) -> dict:
                 "clinical_summary": "AI analysis completed. Please review the case details.",
                 "considerations": ["Manual clinical review recommended"],
                 "red_flags": [],
+                "image_findings": [],
                 "prescription_review": [],
                 "next_steps": ["Continue standard clinical evaluation"]
             }
@@ -444,21 +510,9 @@ async def analyze_case_with_ai(case_data: dict) -> dict:
 
 
 
-# ============== OCR SERVICE (Mock) ==============
 
-def mock_ocr_extract(filename: str) -> dict:
-    """Mock OCR extraction for prescription images"""
-    # Simulated prescription extraction
-    mock_medications = [
-        {"name": "Amoxicillin", "dosage": "500mg", "frequency": "3x daily", "duration": "7 days"},
-        {"name": "Paracetamol", "dosage": "650mg", "frequency": "As needed", "duration": "PRN"}
-    ]
-    
-    return {
-        "medications": mock_medications,
-        "raw_text": f"Extracted from {filename}: Rx - Amoxicillin 500mg TID x 7 days, Paracetamol 650mg PRN",
-        "confidence": 0.85
-    }
+# ============== OCR SERVICE (Textract + Gemini) ==============
+
 
 # ============== PDF SERVICE ==============
 
@@ -1032,16 +1086,18 @@ async def update_case(case_id: str, data: CaseCreate, doctor: dict = Depends(get
 
 @api_router.post("/cases/upload-prescription", response_model=PrescriptionExtractResponse)
 async def upload_prescription(file: UploadFile = File(...), doctor: dict = Depends(get_current_doctor)):
-    # Read file content into memory — no need to persist prescription uploads
+    from ocr_service import extract_prescription
+
+    # Read file content into memory
     content = await file.read()
 
     if AWS_S3_BUCKET:
-        # Optionally save to S3 for audit trail
+        # Save to S3 for audit trail
         s3_key = f"prescriptions/{uuid.uuid4()}_{file.filename}"
         upload_to_s3(content, s3_key, file.content_type or 'application/octet-stream')
 
-    # Mock OCR extraction (operates on filename metadata)
-    result = mock_ocr_extract(file.filename)
+    # Real OCR: Textract → Gemini structured parsing
+    result = await extract_prescription(content, file.filename)
     return PrescriptionExtractResponse(**result)
 
 @api_router.post("/cases/upload-image")
@@ -1076,13 +1132,19 @@ async def get_upload(filename: str):
 # ============== AI ROUTES ==============
 
 @api_router.post("/ai/analyse-case")
-async def analyse_case(case_id: str, doctor: dict = Depends(get_current_doctor)):
+async def analyse_case(
+    case_id: str,
+    body: AnalyseCaseBody = None,
+    doctor: dict = Depends(get_current_doctor),
+):
     case = await db.cases.find_one({"id": case_id, "doctor_id": doctor['id']}, {"_id": 0})
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
 
-    # Run RAG + AI analysis pipeline
-    result = await analyze_case_with_ai(case)
+    doctor_context = (body.doctor_context if body else None) or None
+
+    # Run RAG + AI analysis pipeline (with optional doctor brainstorm context)
+    result = await analyze_case_with_ai(case, doctor_context=doctor_context)
     ai_analysis = result["ai_analysis"]
     guidelines = result["guidelines"]
     rag_metadata = result["rag_metadata"]
@@ -1107,6 +1169,7 @@ async def analyse_case(case_id: str, doctor: dict = Depends(get_current_doctor))
         "analysis": ai_analysis,
         "guidelines_count": len(guidelines),
         "rag_available": rag_metadata.get("rag_available", False),
+        "doctor_context_provided": bool(doctor_context),
         "created_at": now
     }
     await db.ai_logs.insert_one(log_doc)

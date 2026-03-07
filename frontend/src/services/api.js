@@ -71,7 +71,8 @@ export const uploadAPI = {
 
 // AI APIs
 export const aiAPI = {
-  analyseCase: (caseId) => api.post(`/ai/analyse-case?case_id=${caseId}`),
+  analyseCase: (caseId, doctorContext = null) =>
+    api.post(`/ai/analyse-case?case_id=${caseId}`, doctorContext ? { doctor_context: doctorContext } : {}),
 };
 
 // ABHA APIs

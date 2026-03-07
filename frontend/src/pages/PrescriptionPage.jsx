@@ -59,6 +59,7 @@ const emptyMed = () => ({ name: "", dosage: "", frequency: "", reason: "" });
 
 const PrescriptionPage = () => {
     const navigate = useNavigate();
+    const location = useLocation();
     const { doctor } = useAuth();
 
     // Patient context
@@ -75,7 +76,7 @@ const PrescriptionPage = () => {
     const [medications, setMedications] = useState([emptyMed()]);
     const [warnings, setWarnings] = useState([]);
 
-    // Load from local storage
+    // Load from local storage, then overlay navigation state (from AI output page)
     useEffect(() => {
         try {
             const savedState = localStorage.getItem("prescription_state");
@@ -92,11 +93,20 @@ const PrescriptionPage = () => {
                 if (parsed.medications) setMedications(parsed.medications);
                 if (parsed.warnings) setWarnings(parsed.warnings);
             }
-            if (!parsed?.sessionId) {
+            if (!savedState || !JSON.parse(savedState || "{}").sessionId) {
                 setSessionId(crypto.randomUUID());
             }
         } catch (e) {
             setSessionId(crypto.randomUUID());
+        }
+
+        // Overlay patient data passed from the AI analysis page (takes priority over stored values)
+        const navState = location.state;
+        if (navState) {
+            if (navState.patientName) setPatientName(navState.patientName);
+            if (navState.patientAge) setPatientAge(String(navState.patientAge));
+            if (navState.patientGender) setPatientGender(navState.patientGender);
+            if (navState.caseId) setPatientId(navState.caseId);
         }
     }, []);
 
