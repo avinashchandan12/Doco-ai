@@ -156,7 +156,7 @@ const NewCasePage = () => {
     try {
       const caseData = {
         patient_name: patientName || null,
-        patient_age: patientAge ? parseInt(patientAge, 10) : null,
+        patient_age: patientAge || null,
         patient_gender: patientGender || null,
         symptoms: selectedSymptoms,
         duration,
