@@ -125,6 +125,14 @@ def _format_guideline_chunks(chunks: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def get_rag_context_preview(chunks: List[Dict[str, Any]]) -> str:
+    """
+    Returns the exact guideline text block that would be injected into the
+    user prompt (for RAG test/debug endpoints).
+    """
+    return _format_guideline_chunks(chunks)
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------

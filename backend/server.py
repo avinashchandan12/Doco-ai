@@ -338,6 +338,21 @@ class AnalyseCaseBody(BaseModel):
     """Optional request body for /ai/analyse-case. Enables doctor brainstorm iteration."""
     doctor_context: Optional[str] = None
 
+
+class TestRAGRequest(BaseModel):
+    """Request for /ai/test-rag: provide either case_id (load from DB) or case_data (inline)."""
+    case_id: Optional[str] = None
+    case_data: Optional[Dict[str, Any]] = None
+
+
+class TestRAGResponse(BaseModel):
+    """Response from /ai/test-rag: RAG retrieval result and context that would be sent to the model."""
+    query: str
+    guidelines: List[dict]
+    rag_available: bool
+    chunks_retrieved: int
+    context_preview: str
+
 # ============== AUTH HELPERS ==============
 
 def hash_password(password: str) -> str:
@@ -1177,6 +1192,48 @@ async def analyse_case(
     # Return updated case
     updated_case = await db.cases.find_one({"id": case_id}, {"_id": 0})
     return CaseResponse(**updated_case)
+
+
+@api_router.post("/ai/test-rag", response_model=TestRAGResponse)
+async def test_rag(
+    body: TestRAGRequest,
+    doctor: dict = Depends(get_current_doctor),
+):
+    """
+    Test RAG retrieval and context input only (no AI analysis).
+    Returns the retrieval query, guideline chunks, and the exact context string
+    that would be injected into the prompt before analysing the case.
+    """
+    from rag_service import retrieve_guidelines, get_retrieval_query
+    from prompt_builder import get_rag_context_preview
+
+    case_data: Optional[Dict[str, Any]] = None
+    if body.case_id:
+        case = await db.cases.find_one({"id": body.case_id, "doctor_id": doctor["id"]}, {"_id": 0})
+        if not case:
+            raise HTTPException(status_code=404, detail="Case not found")
+        case_data = case
+    if body.case_data:
+        case_data = body.case_data
+
+    if not case_data:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either case_id (to load a case from DB) or case_data (inline payload).",
+        )
+
+    query = get_retrieval_query(case_data)
+    guidelines, rag_available = await retrieve_guidelines(case_data)
+    context_preview = get_rag_context_preview(guidelines) if guidelines else ""
+
+    return TestRAGResponse(
+        query=query,
+        guidelines=guidelines,
+        rag_available=rag_available,
+        chunks_retrieved=len(guidelines),
+        context_preview=context_preview,
+    )
+
 
 # ============== REPORT ROUTES ==============
 

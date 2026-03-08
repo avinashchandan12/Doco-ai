@@ -18,9 +18,11 @@ logger = logging.getLogger(__name__)
 # Config (loaded from environment, set at module level for reuse)
 # ---------------------------------------------------------------------------
 BEDROCK_KB_ID = os.environ.get("AWS_BEDROCK_KB_ID", "")
-BEDROCK_REGION = os.environ.get("AWS_BEDROCK_REGION", "us-east-1")
+BEDROCK_REGION = os.environ.get("AWS_BEDROCK_REGION", "")
 BEDROCK_TOP_K = int(os.environ.get("BEDROCK_RAG_TOP_K", "5"))
-BEDROCK_RELEVANCE_THRESHOLD = float(os.environ.get("BEDROCK_RELEVANCE_THRESHOLD", "0.70"))
+# Bedrock retrieve often returns scores in ~0.35–0.55 range; 0.70 filters out most results.
+# Set BEDROCK_RELEVANCE_THRESHOLD in .env to tune (e.g. 0.70 for stricter, 0.35 for more permissive).
+BEDROCK_RELEVANCE_THRESHOLD = float(os.environ.get("BEDROCK_RELEVANCE_THRESHOLD", "0.35"))
 
 
 def _get_bedrock_client():
@@ -74,6 +76,14 @@ def _build_retrieval_query(case_data: dict) -> str:
                 parts.append("Current Medications: " + ", ".join(med_names))
 
     return ". ".join(parts) or "General clinical guidelines"
+
+
+def get_retrieval_query(case_data: dict) -> str:
+    """
+    Public helper for tests/debug: returns the query string that would be
+    sent to Bedrock for RAG retrieval (same as used inside retrieve_guidelines).
+    """
+    return _build_retrieval_query(case_data)
 
 
 def _parse_retrieval_results(results: List[dict]) -> List[Dict[str, Any]]:
@@ -173,6 +183,15 @@ async def retrieve_guidelines(case_data: dict) -> tuple[List[Dict[str, Any]], bo
         )
 
         raw_results = response.get("retrievalResults", [])
+        # Debug: log raw result count and scores to diagnose empty guidelines
+        if raw_results:
+            scores = [r.get("score", None) for r in raw_results]
+            logger.info(f"RAG: Bedrock returned {len(raw_results)} raw results; scores={scores}")
+        else:
+            logger.warning(
+                "RAG: Bedrock returned 0 raw results. "
+                "Check that the Knowledge Base has data sources synced and that the query matches indexed content."
+            )
         chunks = _parse_retrieval_results(raw_results)
 
         logger.info(
