@@ -401,10 +401,9 @@ async def analyze_case_with_ai(case_data: dict, doctor_context: Optional[str] = 
     from rag_service import retrieve_guidelines
     from prompt_builder import build_enriched_prompt, build_basic_prompt
 
-    # Support both GEMINI_API_KEY and legacy EMERGENT_LLM_KEY
-    api_key = os.environ.get('GEMINI_API_KEY') or os.environ.get('EMERGENT_LLM_KEY')
+    api_key = os.environ.get('GEMINI_API_KEY')
     if not api_key:
-        logger.error("No AI API key found (GEMINI_API_KEY or EMERGENT_LLM_KEY)")
+        logger.error("No AI API key found (GEMINI_API_KEY)")
         raise HTTPException(status_code=500, detail="AI service not configured")
 
     # ── Step 1: RAG retrieval (graceful fallback built into rag_service) ──

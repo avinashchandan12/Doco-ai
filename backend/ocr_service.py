@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 AWS_REGION = os.environ.get("AWS_REGION", "ap-south-1")
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("EMERGENT_LLM_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 
 # ---------------------------------------------------------------------------
